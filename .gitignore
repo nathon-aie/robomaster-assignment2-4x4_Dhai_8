@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.py[cod]
+telemetry_logs/*.csv
+telemetry_logs/*.png
+telemetry_logs/*.json
+telemetry_logs/*/
+analyze/*.png
+WORK.md

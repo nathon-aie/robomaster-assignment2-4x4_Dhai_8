@@ -1,0 +1,127 @@
+# ค่าพื้นฐาน: ระยะ mm / m, มุม degree, เวลา second, ความถี่ Hz
+# Sharp ใช้ centering; ToF บน Gimbal ใช้ mapping และตรวจด้านหน้า
+robot:
+  conn_type: ap
+  # SDK z command sign relative to yaw telemetry; verify on the physical robot
+  yaw_command_sign: -1
+  # drive_speed z has a different sign from chassis.move z (confirmed by run6)
+  yaw_speed_command_sign: 1
+
+paths:
+  calibration: calibration_output/calibration.json
+  telemetry: telemetry_logs
+  measurements: data/calibration_measurements.csv
+  calibration_output: calibration_output
+
+sensors:
+  rate_hz: 20
+  history_capacity: 1000
+  tof_index: 0
+  sharp_left: {board_id: 1, port: 1, adc_index: 0}
+  sharp_right: {board_id: 2, port: 2, adc_index: 3}
+  sharp_filter: {min_valid: 20, max_valid: 1020, median_window: 5, ema_alpha: 0.35}
+  tof_filter: {min_valid: 10, max_valid: 5000, median_window: 5, ema_alpha: 0.40}
+
+navigation:
+  grid_size_m: 0.60
+  base_speed_mps: 0.25
+  step_test_speed_mps: 0.20
+  control_rate_hz: 20
+  max_heading_error_deg: 15
+  max_lateral_deviation_m: 0.15
+  nominal_side_mm: 140
+  tolerance_mm: 20
+  side_wall_threshold_mm: 260
+  front_wall_threshold_mm: 350
+  front_target_mm: 180
+  emergency_front_mm: 150
+  front_stop_tolerance_mm: 20
+  # A ToF wall stop after halfway can finish a cell despite odometry drift
+  front_wall_arrival_min_fraction: 0.5
+  front_deceleration_mm: 150
+  end_deceleration_m: 0.12
+  minimum_forward_speed_mps: 0.08
+  minimum_front_speed_mps: 0.05
+  timeout_multiplier: 1.8
+  timeout_extra_sec: 1.5
+  align_duration_sec: 0.3
+  align_default_duration_sec: 0.4
+  step_pause_sec: 1.0
+  turn_speed_dps: 90
+  turn_settle_sec: 0.20
+  duration_sec: 0
+
+pid:
+  lateral: {kp: 0.0010, ki: 0.0001, kd: 0.0010, max_speed: 0.08, integral_limit: 30}
+  yaw: {kp: 1.8, ki: 0.05, kd: 0.15, max_speed: 35, integral_limit: 20}
+
+telemetry:
+  buffer_capacity: 10000
+
+system:
+  sensor_warmup_sec: 0.3
+  step_test_timeout_sec: 30
+  turn_test_timeout_sec: 15
+
+calibration:
+  samples: 10
+  degrees: {sharp_left: 2, sharp_right: 2, tof: 1}
+
+gimbal:
+  test_cycles: 2
+  recenter_yaw_speed_dps: 300
+  recenter_pitch_speed_dps: 120
+  # chassis: turn in place with ToF facing forward; gimbal: requires full yaw range
+  scan_mode: gimbal
+  pitch_deg: 0
+  yaw_speed_dps: 180
+  pitch_speed_dps: 60
+  settle_sec: 0.25
+  action_timeout_sec: 8
+  # Other travel segments; left -> right sweep uses one 180-degree move
+  move_step_deg: 90
+  # One absolute front position command before chassis motion; no feedback trims
+  hold_front_on_move: true
+  # ToF pivot relative to chassis centre: +x forward, +y right (measure hardware)
+  pivot_x_m: 0.0
+  pivot_y_m: 0.0
+  beam_offset_m: 0.0
+# พิกัดช่อง (row, column): แถวเพิ่มขึ้นด้านบน คอลัมน์เพิ่มไปทางขวา; ไม่ใช่เมตร
+# ขนาดและจุดเริ่มไม่กำหนดว่ามีกำแพงที่ใด กำแพงยังต้องสำรวจจาก ToF
+
+map:
+  rows: 5
+  columns: 4
+  start:
+    row: 0
+    column: 0
+
+slam:
+  wall_thickness_m: 0.075
+  wall_margin_m: 0.06
+  sensor_timeout_sec: 2
+  max_sensor_age_sec: 0.3
+  # While stationary, allow pose packets to recover before aborting the scan
+  scan_pose_recovery_timeout_sec: 2
+  scan_samples: 3
+  max_cells: 200
+  max_moves: 1000
+  heading_tolerance_deg: 1
+  heading_align_timeout_sec: 3
+  startup_settle_sec: 1.0
+  stationary_settle_sec: 0.3
+  stationary_timeout_sec: 3
+  cell_arrival_tolerance_m: 0.10
+  localization_gate_m: 0.15
+  initial_variance_m2: 0.0025
+  motion_variance_m2: 0.0016
+  range_variance_m2: 0.0004
+  max_pose_std_m: 0.22
+  # Clockwise global directions from initial forward: N, E, S, W
+  direction_order: [0, 1, 2, 3]
+
+# Passive chassis motion check during Gimbal scans; does not rotate the chassis.
+scan_guard:
+  max_heading_drift_deg: 3
+  # Warning threshold only: position drift does not abort a stationary scan
+  max_position_drift_m: 0.03

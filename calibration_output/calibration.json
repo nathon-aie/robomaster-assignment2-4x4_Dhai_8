@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "source_csv": "/home/nathon/My_Projects/SLAM/data/calibration_measurements.csv",
+  "sensors": {
+    "sharp_left": {
+      "degree": 2,
+      "coefficients": [
+        0.0015634123543582755,
+        -1.592718773829918,
+        444.18900476675213
+      ],
+      "rmse_mm": 11.16365293993293,
+      "r2": 0.982908276987894,
+      "samples": 6,
+      "raw_min": 115.0,
+      "raw_max": 601.0,
+      "reference_min_mm": 50.0,
+      "reference_max_mm": 300.0
+    },
+    "sharp_right": {
+      "degree": 2,
+      "coefficients": [
+        0.0007881440056314143,
+        -1.3216646345272038,
+        610.43776036934
+      ],
+      "rmse_mm": 14.487270177149558,
+      "r2": 0.9712163203859574,
+      "samples": 6,
+      "raw_min": 301.0,
+      "raw_max": 729.0,
+      "reference_min_mm": 50.0,
+      "reference_max_mm": 300.0
+    }
+  }
+}

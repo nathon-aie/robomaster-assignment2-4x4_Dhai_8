@@ -1,0 +1,9 @@
+# Runtime and calibration dependencies for Python 3.8
+numpy==1.24.4
+matplotlib==3.7.5
+
+# DJI RoboMaster SDK for EP
+robomaster @ git+https://github.com/dji-sdk/RoboMaster-SDK.git
+
+# Shared YAML configuration
+PyYAML==6.0.1
