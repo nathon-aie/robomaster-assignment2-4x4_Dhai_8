@@ -90,8 +90,8 @@ gimbal:
 # ขนาดและจุดเริ่มไม่กำหนดว่ามีกำแพงที่ใด กำแพงยังต้องสำรวจจาก ToF
 
 map:
-  rows: 3
-  columns: 4
+  rows: 6
+  columns: 6
   start:
     row: 0
     column: 0
@@ -106,8 +106,8 @@ slam:
   scan_samples: 3
   max_cells: 200
   max_moves: 1000
-  heading_tolerance_deg: 1
-  heading_align_timeout_sec: 3
+  heading_tolerance_deg: 2
+  heading_align_timeout_sec: 4
   startup_settle_sec: 1.0
   stationary_settle_sec: 0.3
   stationary_timeout_sec: 3
@@ -122,6 +122,6 @@ slam:
 
 # Passive chassis motion check during Gimbal scans; does not rotate the chassis.
 scan_guard:
-  max_heading_drift_deg: 3
+  max_heading_drift_deg: 5
   # Warning threshold only: position drift does not abort a stationary scan
   max_position_drift_m: 0.03

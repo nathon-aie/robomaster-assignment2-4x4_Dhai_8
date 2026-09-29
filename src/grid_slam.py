@@ -160,20 +160,27 @@ and correct the continuous pose; this is not unrestricted metric pose-graph SLAM
             drow, dcolumn = DIRECTIONS[d]
             axis, sign = (0, drow) if drow else (1, dcolumn)
             offset = self.offset(scan_headings[d], d)
-            boundary = (self.cell[axis] + sign * 0.5) * size
-            expected = sign * (boundary - self.pose[axis] - offset[axis]) - setting('slam.wall_thickness_m') / 2
-            # Close endpoints mark the adjacent edge as blocked, even when
-            # shorter than the ideal grid geometry. Longer beams imply open edges.
-            margin = setting('slam.wall_margin_m')
-            wall = distance <= expected + margin
+            # ToF always returns a distance. Only a return at the nearby cell
+            # boundary means this edge is a wall; a farther return is beyond it.
+            wall_limit = (size / 2 - sign * offset[axis]
+                          - setting('slam.wall_thickness_m') / 2
+                          + setting('slam.wall_margin_m'))
+            wall = distance <= wall_limit
             observations.append((d, wall))
         for d, wall in observations:
             previous = self.map.wall(self.cell, d)
             if previous is not None and previous != wall:
+                edge = self.map.edge(self.cell, d)
+                crossed = any(e.get('type') == 'move' and
+                              tuple(sorted((tuple(e['from']), tuple(e['to'])))) == edge
+                              for e in self.events)
                 self.events.append({'timestamp': time.time(), 'type': 'wall_mismatch',
                                     'cell': list(self.cell), 'direction': NAMES[d],
-                                    'previous_wall': previous, 'observed_wall': wall})
-                # Preserve the confirmed edge instead of flipping it from one scan.
+                                    'previous_wall': previous, 'observed_wall': wall,
+                                    'crossed': crossed})
+                if wall and not crossed:
+                    # A short return closes an edge previously thought open.
+                    self.map.edges[edge] = True
                 continue
             self.map.observe(self.cell, d, wall)
             if not wall and not self.contains(neighbor(self.cell, d)):

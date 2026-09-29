@@ -202,18 +202,17 @@ def classify_shape_perspective(contour, frame_shape):
 
 def is_in_blaster_zone(box, frame_shape):
     """
-    Checks if a detected bounding box lies within the robot blaster barrel
-    or chassis exclusion zone at the bottom of the camera frame.
+    Checks if a detected bounding box lies specifically within the robot blaster
+    barrel (ปากกระบอกปืน) at the bottom center of the camera frame.
     """
     frame_h, frame_w = frame_shape[:2]
     bx, by, bw, bh = box
     cx = bx + bw // 2
     cy = by + bh // 2
-    # Bottom horizontal plane exclusion at blaster level across the entire frame
-    if cy >= int(frame_h * 0.84) or (by + bh) >= int(frame_h * 0.94):
+    # Blaster barrel zone (เฉพาะบริเวณปากกระบอกปืนตรงกลางล่าง: x: 38%-62%, y >= 80%)
+    if cy >= int(frame_h * 0.80) and int(frame_w * 0.38) <= cx <= int(frame_w * 0.62):
         return True
-    # Blaster barrel zone (bottom center)
-    if cy >= int(frame_h * 0.80) and int(frame_w * 0.35) <= cx <= int(frame_w * 0.65):
+    if (by + bh) >= int(frame_h * 0.88) and int(frame_w * 0.38) <= cx <= int(frame_w * 0.62):
         return True
     return False
 
@@ -319,17 +318,19 @@ def extract_candidate_regions(frame):
     bright_mask = cv2.threshold(v_channel, 35, 255, cv2.THRESH_BINARY)[1]
     candidate_mask = cv2.bitwise_and(color_saliency, bright_mask)
 
-    # Crop out the entire bottom horizontal plane at the level of the blaster barrel (ระนาบปากกระบอกปืน)
-    blaster_plane_top = int(frame_h * 0.84)
-    candidate_mask[blaster_plane_top:, :] = 0
+    # Crop out specifically the robot blaster barrel (ปากกระบอกปืนตรงกลางล่าง)
+    blaster_top = int(frame_h * 0.82)
+    blaster_left = int(frame_w * 0.38)
+    blaster_right = int(frame_w * 0.62)
+    candidate_mask[blaster_top:, blaster_left:blaster_right] = 0
 
     # Morphological cleanup
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
     candidate_mask = cv2.morphologyEx(candidate_mask, cv2.MORPH_OPEN, kernel, iterations=1)
     candidate_mask = cv2.morphologyEx(candidate_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    # Re-enforce bottom plane crop after closing so no scanner traces leak through
-    candidate_mask[blaster_plane_top:, :] = 0
+    # Re-enforce blaster barrel crop after closing
+    candidate_mask[blaster_top:, blaster_left:blaster_right] = 0
 
     return candidate_mask
 

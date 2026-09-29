@@ -63,8 +63,12 @@ class HardwareBackend:
                                        'position_m': [state.pos_x, state.pos_y]})
                 self.scan_position_warning_logged = True
             if yaw_drift > setting('scan_guard.max_heading_drift_deg'):
-                raise RuntimeError('Stationary scan: chassis moved (yaw drift={:.2f} deg, position drift={:.3f} m)'.format(
-                    yaw_drift, position_drift))
+                self.event_log.append({'timestamp': time.time(), 'type': 'scan_yaw_drift_warning',
+                                       'yaw_drift_deg': yaw_drift})
+                print(f"\n[Scan Guard] ⚠️ ตรวจพบ Yaw Drift ({yaw_drift:.2f}° > {setting('scan_guard.max_heading_drift_deg')}°) ทำการ Align Heading ใหม่อัตโนมัติ...")
+                self.align_heading()
+                refreshed = self.hub.get_latest_state()
+                origin = (origin[0], origin[1], refreshed.yaw)
         return waited
 
     def fresh(self, state, fields):
@@ -237,6 +241,14 @@ class HardwareBackend:
                 speed = max(-20.0, min(20.0, error * 1.8))
                 self.controller.drive_speed(0, 0, speed)
                 time.sleep(0.05)
+            # If deadline reached, check if error is within user acceptable tolerance (+-5 deg)
+            state = self.hub.get_latest_state()
+            if self.fresh(state, ['attitude_received_at']) and math.isfinite(state.yaw):
+                final_err = abs(wrap(target - state.yaw))
+                if final_err <= 5.0:
+                    self.controller.target_heading_deg = target
+                    print(f"\n[Heading] ⚠️ ปรับองศาเข้าเกณฑ์ปลอดภัย (Error: {final_err:.2f}° <= ±5°) ดำเนินการต่อได้")
+                    return
             raise RuntimeError('Chassis heading alignment timed out')
         finally:
             self.controller.stop_chassis()
