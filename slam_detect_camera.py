@@ -24,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 MAX_SENSOR_AGE_SEC = setting("slam.max_sensor_age_sec")
 FRONT_VIEW_TOLERANCE_DEG = 12.0
 MAX_STATIONARY_SPEED_MPS = 0.03
-SIGN_CONFIRMATION_FRAMES = 3
+SIGN_CONFIRMATION_FRAMES = 1
 MAX_TOF_MARK_SAMPLES = 15
 SIGN_LOOK_DOWN_PITCH_DEG = -20.0
 SIGN_INSPECTION_TIMEOUT_SEC = 1.2
@@ -475,7 +475,9 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                 if not ok:
                     frame = None
 
-            if frame is not None:
+            if frame is None:
+                time.sleep(0.01)
+            else:
                 result, mask, detections = detect_signs(frame)
                 valid_wall_distance = None
                 active_inspection = None
@@ -515,21 +517,18 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                         if len(captured_snapshots[key]) < SIGN_CONFIRMATION_FRAMES:
                             snap_idx = len(captured_snapshots[key]) + 1
                             cell_str = "c{}_{}".format(current_cell[0], current_cell[1])
-                            dir_str = NAMES[current_direction]
                             img_name = "{}_{}_{}_{}_snap{}.jpg".format(
                                 cell_str, dir_str, detection["color"], detection["shape"], snap_idx
                             )
                             img_path = captured_signs_dir / img_name
-                            # บันทึกภาพลงดิสก์ใน Background Thread เพื่อไม่ให้หน้าต่างกล้องสะดุด/ค้าง
-                            threading.Thread(
-                                target=cv2.imwrite,
-                                args=(str(img_path), frame.copy()),
-                                daemon=True
-                            ).start()
-                            captured_snapshots[key].append(img_name)
-                            print("[Snapshot] Saved target photo {}/{}: {}".format(
-                                snap_idx, SIGN_CONFIRMATION_FRAMES, img_name
-                            ))
+                            try:
+                                cv2.imwrite(str(img_path), frame)
+                                captured_snapshots[key].append(img_name)
+                                print("[Snapshot] Saved target photo {}/{}: {}".format(
+                                    snap_idx, SIGN_CONFIRMATION_FRAMES, img_name
+                                ))
+                            except Exception as write_err:
+                                print("[Snapshot] Warning saving photo {}: {}".format(img_name, write_err))
 
                         if streak >= SIGN_CONFIRMATION_FRAMES:
                             mark = sign_marks.get(key)
@@ -594,6 +593,17 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                       .format(status, explorer.moves, len(explorer.slam.map.visited)))
                 print("Map saved to: {}".format(explorer.output))
                 announced = True
+
+            # Check if user closed the OpenCV window via the [X] title-bar button
+            try:
+                if cv2.getWindowProperty("RoboMaster - Camera & Sign Mask", cv2.WND_PROP_VISIBLE) < 1:
+                    print("[Camera] Window closed by user.")
+                    inspection_finished.set()
+                    if worker.is_alive() and stop_motion is not None:
+                        stop_motion()
+                    break
+            except Exception:
+                pass
 
             if control and control.cancel.is_set():
                 print("[Camera] Cancel signal received from control.")
