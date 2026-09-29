@@ -42,11 +42,15 @@ def parse_custom_commands(cmd_input: str) -> List[str]:
     return parsed
 
 
-def run_motion(commands, speed, timeout):
+def run_motion(commands, speed, timeout, control=None):
     """Execute menu-selected commands and shut down once on completion or interruption."""
     system = RobotSystem()
+    if control:
+        control.set_system(system)
     try:
         if not system.connect_robot():
+            return 1
+        if control and control.cancel.is_set():
             return 1
         system.setup_threads()
         system.thread_2_controller.base_speed = speed
@@ -60,42 +64,46 @@ def run_motion(commands, speed, timeout):
         system.shutdown()
 
 
-def run_motion_test(commands):
+def run_motion_test(commands, control=None):
     commands = parse_custom_commands(commands)
     if not commands:
         return 0
     duration = setting('navigation.duration_sec')
     return run_motion(commands, setting('navigation.base_speed_mps'),
-                      duration if duration > 0 else None)
+                      duration if duration > 0 else None, control=control)
 
 
-def test_step():
+def test_step(control=None):
     print('[Motion] ทดสอบเดินหน้า 1 ช่อง พร้อม Sharp Centering และ ToF กันชน')
     return run_motion(['Move Forward: 1 cells'], setting('navigation.step_test_speed_mps'),
-                      setting('system.step_test_timeout_sec'))
+                      setting('system.step_test_timeout_sec'), control=control)
 
 
-def test_turn(direction):
+def test_turn(direction='right', control=None):
     commands = {'left': 'Turn Left (90 deg)', 'right': 'Turn Right (90 deg)',
                 'around': 'Turn Around (180 deg)'}
     return run_motion([commands[direction]], setting('navigation.base_speed_mps'),
-                      setting('system.turn_test_timeout_sec'))
+                      setting('system.turn_test_timeout_sec'), control=control)
 
 
-def monitor_sensors():
+def monitor_sensors(control=None):
     print("=" * 65)
     print("📡 LIVE SENSOR MONITOR (THREAD 1)")
     print("=" * 65)
     sys_runner = RobotSystem()
+    if control:
+        control.set_system(sys_runner)
     if not sys_runner.connect_robot():
         sys_runner.shutdown(save_telemetry=False, run_analysis=False)
         return 1
     try:
+        if control and control.cancel.is_set():
+            return 1
         sys_runner.setup_threads()
         sys_runner.thread_1_sensor.start_collecting()
         print(f"{'Frame':<8} | {'Sharp L (mm)':<13} | {'Sharp R (mm)':<13} | {'ToF (mm)':<10} | {'Yaw (deg)':<10} | {'Walls (L/F/R)'}")
         print("-" * 75)
-        while True:
+        while not (control and control.cancel.is_set()):
             state = sys_runner.sensor_hub.wait_for_next_state(timeout=1.0)
             if state:
                 sl = f"{state.sharp_left_mm:.1f}" if state.sharp_left_mm is not None else "N/A"
@@ -114,18 +122,23 @@ def analyze_log(file):
     return 0
 
 
-def calibrate_sensors(action):
+def calibrate_sensors(action, reference_provider=None, control=None):
     from src.calibrate import CalibrationSession, fit_command
+    if action == 'fit':
+        fit_command(project_path('paths.measurements'), project_path('paths.calibration_output'))
+        return 0
     session = CalibrationSession(setting('robot.conn_type'))
     status = 0
     try:
+        if reference_provider or control:
+            session.collect(action, project_path('paths.measurements'), None, None,
+                            setting('sensors.tof_index'), setting('calibration.samples'),
+                            reference_provider=reference_provider)
+            return 1 if control and control.cancel.is_set() else 0
         while action is not None:
             try:
-                if action == 'fit':
-                    fit_command(project_path('paths.measurements'), project_path('paths.calibration_output'))
-                else:
-                    session.collect(action, project_path('paths.measurements'), None, None,
-                                    setting('sensors.tof_index'), setting('calibration.samples'))
+                session.collect(action, project_path('paths.measurements'), None, None,
+                                setting('sensors.tof_index'), setting('calibration.samples'))
             except (OSError, RuntimeError, ValueError) as exc:
                 print('[calibration] {}'.format(exc), file=sys.stderr)
                 status = 1
@@ -137,7 +150,7 @@ def calibrate_sensors(action):
     return status
 
 
-def test_gimbal():
+def test_gimbal(control=None):
     """Scan without starting the queued motion worker."""
     from src.slam_hardware import HardwareBackend
     from src.sdk_connection import cancel_chassis_speed_timer
@@ -146,10 +159,14 @@ def test_gimbal():
         print('[Gimbal test] จำนวนรอบต้องมากกว่า 0')
         return 1
     system = RobotSystem()
+    if control:
+        control.set_system(system)
     backend = None
     status, error = 'failed', ''
     try:
         if not system.connect_robot():
+            return 1
+        if control and control.cancel.is_set():
             return 1
         system.setup_threads()
         system.thread_1_sensor.start_collecting()
@@ -160,20 +177,21 @@ def test_gimbal():
             if time.monotonic() > deadline:
                 raise RuntimeError('No initial position/attitude data')
             time.sleep(0.01)
-        # This test never starts chassis motion. Send one stop request, but a
-        # missing ACK must not prevent testing the Gimbal on an idle chassis.
         cancel_chassis_speed_timer(system.robot.chassis)
         stopped = system.robot.chassis.drive_wheels(w1=0, w2=0, w3=0, w4=0)
         if stopped is not True:
             print('[Gimbal test] ส่งคำสั่งหยุดล้อแล้ว แต่ SDK ไม่ตอบรับ — เริ่มทดสอบ Gimbal')
         backend.wait_stationary_pose()
         for cycle in range(cycles):
+            if control and control.cancel.is_set():
+                status = 'interrupted'
+                break
             print('[Gimbal test] รอบ {}/{} — สแกน {} ทิศ (Ctrl+C เพื่อหยุด)'.format(
                 cycle + 1, cycles, 4 if cycle == 0 else 3))
-            # Always use Gimbal scans, regardless of the exploration scan mode.
             ranges, _, _ = backend.scan(mode='gimbal')
             print('[Gimbal test] ToF (m): {}'.format(ranges))
-        status = 'completed'
+        if status != 'interrupted':
+            status = 'completed'
     except (Exception, KeyboardInterrupt) as exc:
         status = 'interrupted' if isinstance(exc, KeyboardInterrupt) else 'failed'
         error = str(exc)
@@ -183,15 +201,21 @@ def test_gimbal():
     return 0 if status == 'completed' else 1
 
 
-def run_exploration():
+def run_exploration(on_map_ready=None, control=None):
     from src.grid_slam import DFSExplorer
     from src.slam_hardware import HardwareBackend
     system = RobotSystem()
     explorer = None
     recorder = system.telemetry
     map_file = Path(recorder.run_dir) / '{}_{}_map.json'.format(recorder.run_name, recorder.timestamp_str)
+    if on_map_ready:
+        on_map_ready(map_file)
+    if control:
+        control.set_system(system)
     try:
         if not system.connect_robot():
+            return 1
+        if control and control.cancel.is_set():
             return 1
         system.setup_threads()
         system.thread_1_sensor.start_collecting()
@@ -223,7 +247,7 @@ def run_exploration():
     return 0 if success else 1
 
 
-def run_exploration_detection(conn_type=None, mock=False):
+def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None, control=None):
     """Explore with SLAM + camera sign detection (captures 3 confirmation images)."""
     import slam_detect_camera
     slam_detect_camera.clear_previous_captures()
@@ -235,16 +259,26 @@ def run_exploration_detection(conn_type=None, mock=False):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     output_path = mission_dir / f"run_detect_{timestamp}" / "explored_map.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if on_map_ready:
+        on_map_ready(output_path)
+
+    success = False
     try:
         if mock:
-            success = slam_detect_camera.run_simulation(camera_index=0, output=output_path)
+            success = slam_detect_camera.run_simulation(camera_index=0, output=output_path, control=control)
         else:
-            success = slam_detect_camera.run_hardware(conn_type, calib, output_path)
-        slam_detect_camera.render_map_image(output_path)
-        return 0 if success else 1
-    except Exception as exc:
-        print(f"[Explore-Detect] Error: {exc}")
-        return 1
+            success = slam_detect_camera.run_hardware(conn_type, calib, output_path, control=control)
+    except (Exception, KeyboardInterrupt) as exc:
+        print(f"[Explore-Detect] Note: {exc}")
+    finally:
+        if output_path.exists():
+            try:
+                map_img = slam_detect_camera.render_map_image(output_path)
+                print(f"[Explore-Detect] 🗺️ บันทึกภาพแผนที่สำเร็จ: {map_img}")
+            except Exception as e:
+                print(f"[Explore-Detect] Warning: ไม่สามารถเรนเดอร์ภาพแผนที่ได้: {e}")
+    return 0 if success else 1
 
 
 def run_camera_detection(mode: str = 'robot-ap'):
@@ -295,10 +329,41 @@ def run_menu():
         return 1
 
 
+def run_selected(task, parameters, gui, control):
+    handlers = {
+        'explore': lambda: run_exploration(on_map_ready=gui.show_map, control=control),
+        'explore-detect': lambda: run_exploration_detection(
+            conn_type=parameters.get('conn_type', setting('robot.conn_type')),
+            mock=parameters.get('mock', False),
+            on_map_ready=gui.show_map,
+            control=control
+        ),
+        'detect-camera': lambda: run_camera_detection(parameters.get('mode', 'robot-ap')),
+        'step-test': lambda: test_step(control=control),
+        'turn-test': lambda: test_turn(parameters.get('direction', 'right'), control=control),
+        'monitor': lambda: monitor_sensors(control=control),
+        'motion': lambda: run_motion_test(parameters.get('commands', ''), control=control),
+        'calibrate': lambda: calibrate_sensors(parameters.get('action'),
+                                               reference_provider=gui.ask_reference,
+                                               control=control),
+        'analysis': lambda: analyze_log(parameters.get('file')),
+        'gimbal-test': lambda: test_gimbal(control=control),
+    }
+    return handlers[task]() or 0
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(
         description="RoboMaster EP - ระบบสำรวจ Grid SLAM และตรวจจับเป้าหมาย (Auto Capture 3 รูป)"
+    )
+    parser.add_argument(
+        "--cli", action="store_true",
+        help="รันตรงใน Command-line ทันที โดยไม่ต้องเปิดหน้าต่าง GUI ก่อน",
+    )
+    parser.add_argument(
+        "--gui", action="store_true",
+        help="เปิดหน้าต่าง GUI (ค่าเริ่มต้นเปิดให้อัตโนมัติอยู่แล้ว)",
     )
     parser.add_argument(
         "--no-camera", action="store_true",
@@ -322,32 +387,43 @@ def main():
     )
     parser.add_argument(
         "--menu", action="store_true",
-        help="เปิดเมนูเลือกคำสั่งแบบ Interactive Menu",
+        help="เปิดเมนูเลือกคำสั่งแบบ Interactive Text Menu",
     )
     args, unknown = parser.parse_known_args()
 
     try:
-        # 1. ถ้าสั่งเปิดเมนู
+        # 1. กรณีระบุคำสั่งเจาะจงผ่าน CLI
         if args.menu:
             return run_menu()
-
-        # 2. ถ้าสั่งทดสอบการเคลื่อนที่อย่างเดียว (เดิน 1 ช่อง หรือ เลี้ยว)
         if args.step:
             return test_step()
         if args.turn:
             return test_turn(args.turn)
-
-        # 3. ถ้าสั่งให้หุ่นเคลื่อนที่สำรวจอย่างเดียวโดยไม่ต้องใช้กล้อง
         if args.no_camera:
             print("[SLAM] เริ่มการสำรวจและสร้างแผนที่ (เคลื่อนที่อย่างเดียว ไม่ใช้กล้อง)")
             return run_exploration()
+        if args.cli:
+            print("=" * 65)
+            print("🚀 เริ่มภารกิจ (CLI Mode): สำรวจ Grid SLAM + ตรวจจับเป้าหมาย (Auto Capture 3 รูป)")
+            print(f"📡 โหมดเชื่อมต่อ: {args.conn_type.upper()}")
+            print("=" * 65)
+            return run_exploration_detection(conn_type=args.conn_type, mock=args.mock)
 
-        # 4. ค่าเริ่มต้น (Default): รันการสำรวจ + ตรวจจับเป้าหมาย (แคปภาพ 3 รูป)
-        print("=" * 65)
-        print("🚀 เริ่มภารกิจ: สำรวจ Grid SLAM + ตรวจจับเป้าหมาย (Auto Capture 3 รูป)")
-        print(f"📡 โหมดเชื่อมต่อ: {args.conn_type.upper()}")
-        print("=" * 65)
-        return run_exploration_detection(conn_type=args.conn_type, mock=args.mock)
+        # 2. ค่าเริ่มต้น (Default): เปิดหน้าต่าง GUI ขึ้นมาก่อนเสมอ
+        from src.operation_menu import OperationGUI
+        gui = OperationGUI(run_selected)
+        gui.run()
+
+        # ถ้าผู้ใช้กดปุ่ม 'ปิด GUI แล้วเริ่มสำรวจทันที' จากในหน้าต่าง GUI
+        if getattr(gui, 'proceed_to_explore', False):
+            conn_type = getattr(gui, 'selected_conn_type', args.conn_type)
+            print("=" * 65)
+            print("🚀 เริ่มภารกิจ: สำรวจ Grid SLAM + ตรวจจับเป้าหมาย (Auto Capture 3 รูป)")
+            print(f"📡 โหมดเชื่อมต่อ: {conn_type.upper()}")
+            print("=" * 65)
+            return run_exploration_detection(conn_type=conn_type, mock=args.mock)
+
+        return 0
 
     except (EOFError, KeyboardInterrupt):
         print('\nหยุดการทำงานโดยผู้ใช้')

@@ -437,7 +437,7 @@ def clear_previous_captures(dirs=None):
     return deleted_count
 
 
-def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None):
+def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control=None):
     outcome = {"completed": False, "error": None}
     sign_marks = {}
     confirmation_streaks = {}
@@ -595,6 +595,13 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None):
                 print("Map saved to: {}".format(explorer.output))
                 announced = True
 
+            if control and control.cancel.is_set():
+                print("[Camera] Cancel signal received from control.")
+                inspection_finished.set()
+                if worker.is_alive() and stop_motion is not None:
+                    stop_motion()
+                break
+
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 inspection_finished.set()
                 if worker.is_alive() and stop_motion is not None:
@@ -624,7 +631,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None):
     return outcome["completed"]
 
 
-def run_simulation(camera_index, output):
+def run_simulation(camera_index, output, control=None):
     from SLAM.src.slam_simulation import SimulationBackend
 
     camera = cv2.VideoCapture(camera_index)
@@ -634,12 +641,12 @@ def run_simulation(camera_index, output):
 
     explorer = DFSExplorer(SimulationBackend(), output)
     try:
-        return run_camera_loop(explorer, camera, camera_is_robot=False)
+        return run_camera_loop(explorer, camera, camera_is_robot=False, control=control)
     finally:
         camera.release()
 
 
-def run_hardware(conn_type, calibration_path, output):
+def run_hardware(conn_type, calibration_path, output, control=None):
     try:
         from src.robot_system import RobotSystem
         from src.slam_hardware import HardwareBackend
@@ -648,11 +655,15 @@ def run_hardware(conn_type, calibration_path, output):
         from SLAM.src.slam_hardware import HardwareBackend
 
     system = RobotSystem(calibration_file=str(calibration_path), conn_type=conn_type)
+    if control:
+        control.set_system(system)
     camera = None
     stream_started = False
     try:
         if not system.connect_robot():
             raise RuntimeError("Could not connect to RoboMaster EP; refusing to use mock mode")
+        if control and control.cancel.is_set():
+            return False
 
         system.setup_threads()
         system.thread_2_controller.wall_pid.front_target_mm = max(
@@ -666,6 +677,8 @@ def run_hardware(conn_type, calibration_path, output):
 
         deadline = time.monotonic() + setting("slam.sensor_timeout_sec")
         while system.sensor_hub.get_latest_state().frame_index == 0:
+            if control and control.cancel.is_set():
+                return False
             if time.monotonic() >= deadline:
                 raise RuntimeError("No initial sensor data from RoboMaster EP")
             time.sleep(0.01)
@@ -676,7 +689,7 @@ def run_hardware(conn_type, calibration_path, output):
         explorer = DFSExplorer(HardwareBackend(system), output)
         stop_motion = system.thread_2_controller.stop_running
         return run_camera_loop(
-            explorer, camera, camera_is_robot=True, stop_motion=stop_motion
+            explorer, camera, camera_is_robot=True, stop_motion=stop_motion, control=control
         )
     finally:
         if system.thread_2_controller is not None:
