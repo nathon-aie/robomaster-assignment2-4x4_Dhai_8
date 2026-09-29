@@ -112,6 +112,8 @@ class RobotControllerThread(threading.Thread):
                 raise RuntimeError("Stale sensor stream: {}".format(name))
         if not all(math.isfinite(v) for v in (state.pos_x, state.pos_y, state.yaw, state.gimbal_yaw, state.gimbal_pitch)):
             raise RuntimeError("Non-finite pose or Gimbal angle")
+        if abs(state.gimbal_yaw) > setting("gimbal.front_yaw_tolerance_deg"):
+            raise RuntimeError("Gimbal no longer faces chassis front during motion")
         raw_tof = state.tof_raw
         far_out_of_range = (isinstance(raw_tof, (int, float))
                             and math.isfinite(raw_tof)
