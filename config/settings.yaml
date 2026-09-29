@@ -24,8 +24,8 @@ sensors:
 
 navigation:
   grid_size_m: 0.60
-  base_speed_mps: 0.25
-  step_test_speed_mps: 0.20
+  base_speed_mps: 0.28
+  step_test_speed_mps: 0.22
   control_rate_hz: 20
   max_heading_error_deg: 15
   max_lateral_deviation_m: 0.15
@@ -47,8 +47,8 @@ navigation:
   align_duration_sec: 0.3
   align_default_duration_sec: 0.4
   step_pause_sec: 1.0
-  turn_speed_dps: 90
-  turn_settle_sec: 0.20
+  turn_speed_dps: 75
+  turn_settle_sec: 0.30
   duration_sec: 0
 
 pid:
@@ -90,8 +90,8 @@ gimbal:
 # ขนาดและจุดเริ่มไม่กำหนดว่ามีกำแพงที่ใด กำแพงยังต้องสำรวจจาก ToF
 
 map:
-  rows: 5
-  columns: 4
+  rows: 6
+  columns: 6
   start:
     row: 0
     column: 0
