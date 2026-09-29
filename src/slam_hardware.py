@@ -2,7 +2,7 @@
 import math
 import statistics
 import time
-from .grid_slam import wrap
+from .grid_slam import BlockedCellError, wrap
 from .sdk_connection import cancel_chassis_speed_timer, stop_chassis_wheels
 from .settings import get as setting
 
@@ -345,8 +345,10 @@ class HardwareBackend:
         self.heading = direction
         self.align_heading()
         distance = self.sample(0, self.aim(0))
-        if distance * 1000 <= setting('navigation.front_target_mm'):
-            raise RuntimeError('Front obstacle prevents entering the next cell')
+        stop_distance_mm = (self.controller.wall_pid.front_target_mm
+                            + setting('navigation.front_stop_tolerance_mm'))
+        if distance * 1000 <= stop_distance_mm:
+            raise BlockedCellError(distance * 1000, stop_distance_mm)
         self.controller.front_ready = True
         before = self.hub.get_latest_state()
         if not self.fresh(before, ['position_received_at', 'attitude_received_at']):

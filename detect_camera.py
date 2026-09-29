@@ -1,4 +1,5 @@
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -34,7 +35,13 @@ COLOR_HUE_TOLERANCES = {
 # Geometric and scale thresholds
 MIN_CONTOUR_AREA = 800
 MAX_FRAME_AREA_RATIO = 0.30
-MIN_SOLIDITY = 0.80
+MIN_SOLIDITY = 0.85
+MIN_ELLIPSE_IOU = 0.80
+MIN_RECTANGULARITY = 0.78
+MIN_COLOR_CONFIDENCE = 0.45
+MIN_COLOR_PURITY = 0.75
+MIN_DARK_COLOR_VALUE = 24
+MIN_DARK_COLOR_SATURATION = 70
 
 MIN_SIZE_CLUSTER_COUNT = 3
 MIN_SIZE_RATIO = 0.55
@@ -63,7 +70,10 @@ def classify_color_relative(roi_bgr, roi_mask=None):
     v_channel = hsv[:, :, 2]
 
     # Select valid saturated colored pixels (exclude white/gray wall and dark shadows)
-    valid_color_mask = (s_channel > 35) & (v_channel > 40)
+    valid_color_mask = ((s_channel > 35) & (v_channel > 40)) | (
+        (s_channel >= MIN_DARK_COLOR_SATURATION)
+        & (v_channel >= MIN_DARK_COLOR_VALUE)
+    )
     if roi_mask is not None:
         valid_color_mask = valid_color_mask & (roi_mask > 0)
 
@@ -104,7 +114,49 @@ def classify_color_relative(roi_bgr, roi_mask=None):
             return None, 0.0
 
     confidence = max(0.0, min(1.0, 1.0 - (best_diff / max_tol)))
+    if confidence < MIN_COLOR_CONFIDENCE:
+        return None, 0.0
+
+    # Reject regions whose median hue happens to match a target even though
+    # the colored pixels are a mixture of different hues.
+    hue_error = circular_hue_diff(valid_hues, COLOR_HUE_CENTERS[best_color])
+    if np.count_nonzero(hue_error <= COLOR_HUE_TOLERANCES[best_color]) / len(valid_hues) < MIN_COLOR_PURITY:
+        return None, 0.0
     return best_color, confidence
+
+
+def refine_color_contour(frame, contour, color_name):
+    """Separate the target color from nearby shadows before measuring its shape."""
+    x, y, w, h = cv2.boundingRect(contour)
+    roi = frame[y:y+h, x:x+w]
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    hue = hsv[:, :, 0].astype(np.float32)
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+    original_mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.drawContours(original_mask, [contour - [x, y]], -1, 255, -1)
+    colored = ((saturation > 35) & (value > 40)) | (
+        (saturation >= MIN_DARK_COLOR_SATURATION)
+        & (value >= MIN_DARK_COLOR_VALUE)
+    )
+    color_mask = np.where(
+        (original_mask > 0) & colored
+        & (circular_hue_diff(hue, COLOR_HUE_CENTERS[color_name])
+           <= COLOR_HUE_TOLERANCES[color_name]),
+        255, 0,
+    ).astype(np.uint8)
+    color_mask = cv2.morphologyEx(
+        color_mask, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+    )
+    components, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL,
+                                     cv2.CHAIN_APPROX_SIMPLE)
+    if not components:
+        return None
+    component = max(components, key=cv2.contourArea)
+    if cv2.contourArea(component) < MIN_CONTOUR_AREA:
+        return None
+    return component + [x, y]
 
 
 def classify_shape_perspective(contour, frame_shape):
@@ -142,7 +194,7 @@ def classify_shape_perspective(contour, frame_shape):
 
     # --- 1. Circle Check (Fit Ellipse + IoU) ---
     is_circle = False
-    if num_vertices >= 5 and len(contour) >= 5:
+    if num_vertices >= 7 and len(contour) >= 5:
         try:
             ellipse = cv2.fitEllipse(contour)
             (ecx, ecy), (e_d1, e_d2), e_angle = ellipse
@@ -165,7 +217,7 @@ def classify_shape_perspective(contour, frame_shape):
                     union = np.count_nonzero((local_cnt_mask > 0) | (local_ell_mask > 0))
                     ellipse_iou = intersection / float(union) if union > 0 else 0.0
 
-                    if ellipse_iou >= 0.75:
+                    if ellipse_iou >= MIN_ELLIPSE_IOU:
                         is_circle = True
         except Exception:
             pass
@@ -182,15 +234,19 @@ def classify_shape_perspective(contour, frame_shape):
 
     rectangularity = area / float(rect_area)
 
-    # Quadrilaterals have 4-5 vertices and rectangularity >= 0.70
-    if rectangularity >= 0.70 and num_vertices in (4, 5):
-        aspect_ratio = w / float(h)
+    # Require a clean quadrilateral before separating square and rectangle ratios.
+    if rectangularity >= MIN_RECTANGULARITY and num_vertices in (4, 5):
+        # Bounding boxes inflate under camera roll. Use the rotated rectangle's
+        # horizontal and vertical sides to distinguish the four target shapes.
+        angle = math.radians(rangle)
+        horizontal, vertical = (rw, rh) if abs(math.cos(angle)) >= abs(math.sin(angle)) else (rh, rw)
+        aspect_ratio = horizontal / float(vertical)
 
-        if 0.68 <= aspect_ratio <= 1.45:
+        if 0.82 <= aspect_ratio <= 1.32:
             shape_name = "Square"
-        elif aspect_ratio > 1.45:
+        elif aspect_ratio >= 1.50:
             shape_name = "Horizontal_Rect"
-        elif aspect_ratio < 0.68:
+        elif aspect_ratio < 0.82:
             shape_name = "Vertical_Rect"
         else:
             return None
@@ -315,7 +371,12 @@ def extract_candidate_regions(frame):
     color_saliency = cv2.bitwise_or(chroma_mask, sat_mask)
 
     # Exclude deep shadows (dark floor/crevices)
-    bright_mask = cv2.threshold(v_channel, 35, 255, cv2.THRESH_BINARY)[1]
+    bright_mask = np.where(
+        (v_channel > 35)
+        | ((v_channel >= MIN_DARK_COLOR_VALUE)
+           & (s_channel >= MIN_DARK_COLOR_SATURATION)),
+        255, 0,
+    ).astype(np.uint8)
     candidate_mask = cv2.bitwise_and(color_saliency, bright_mask)
 
     # Crop out specifically the robot blaster barrel (ปากกระบอกปืนตรงกลางล่าง)
@@ -373,20 +434,8 @@ def detect_signs(frame, debug=False):
     erode_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 
     for contour in contours:
-        shape_info = classify_shape_perspective(contour, (frame_h, frame_w))
-        if shape_info is None:
-            continue
-        shape_name, (x, y, w, h) = shape_info
-
-        # Skip any candidates in the blaster barrel zone
-        if is_in_blaster_zone((x, y, w, h), (frame_h, frame_w)):
-            continue
-
-        # Reject floors of any color (wood, green, blue, red) via placard border test
-        if not is_valid_sign_placard(frame, (x, y, w, h)):
-            continue
-
-        # Extract local mask of contour interior
+        # Identify the color first so nearby shadows cannot distort the shape.
+        x, y, w, h = cv2.boundingRect(contour)
         roi_mask = np.zeros((h, w), dtype=np.uint8)
         shifted_cnt = contour - [x, y]
         cv2.drawContours(roi_mask, [shifted_cnt], -1, 255, -1)
@@ -401,12 +450,25 @@ def detect_signs(frame, debug=False):
         if color_name is None:
             continue
 
+        refined = refine_color_contour(frame, contour, color_name)
+        if refined is None:
+            continue
+        shape_info = classify_shape_perspective(refined, (frame_h, frame_w))
+        if shape_info is None:
+            continue
+        shape_name, (x, y, w, h) = shape_info
+
+        if is_in_blaster_zone((x, y, w, h), (frame_h, frame_w)):
+            continue
+        if not is_valid_sign_placard(frame, (x, y, w, h)):
+            continue
+
         center = (x + w // 2, y + h // 2)
         detections.append({
             "color": color_name,
             "shape": shape_name,
             "center": center,
-            "contour": contour,
+            "contour": refined,
             "box": (x, y, w, h),
             "confidence": confidence,
         })

@@ -3,6 +3,7 @@ import json
 import math
 import threading
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -24,10 +25,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 MAX_SENSOR_AGE_SEC = setting("slam.max_sensor_age_sec")
 FRONT_VIEW_TOLERANCE_DEG = 12.0
 MAX_STATIONARY_SPEED_MPS = 0.03
-SIGN_CONFIRMATION_FRAMES = 1
+SIGN_CONFIRMATION_FRAMES = 3
 MAX_TOF_MARK_SAMPLES = 15
 SIGN_LOOK_DOWN_PITCH_DEG = -20.0
-SIGN_INSPECTION_TIMEOUT_SEC = 1.2
+SIGN_INSPECTION_TIMEOUT_SEC = 1.8
 SIGN_CAMERA_SWEEP_OFFSETS_DEG = (0.0,)
 FRONT_STOP_TARGET_MM = 220.0
 
@@ -84,7 +85,18 @@ def front_wall_distance(slam, direction, distance_m, sensor_heading=None):
         return None
 
     distance_mm = distance_m * 1000
-    if distance_mm > expected_mm + setting("slam.wall_margin_m") * 1000:
+    # Odometry may still be off-centre before SLAM corrects this scan.
+    # Keep nearby side walls eligible for camera inspection while excluding
+    # the next cell's distant wall.
+    nominal_limit_mm = 1000 * (
+        setting("navigation.grid_size_m") / 2
+        - sign * offset[axis]
+        - setting("slam.wall_thickness_m") / 2
+        + setting("slam.wall_margin_m")
+        + setting("slam.localization_gate_m")
+    )
+    if distance_mm > max(expected_mm + setting("slam.wall_margin_m") * 1000,
+                         nominal_limit_mm):
         return None
     return distance_mm
 
@@ -107,10 +119,13 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
             if distance_mm is not None:
                 walls.append((direction, sensor_heading, distance_mm))
 
+        print("[Sign scan] Nearby walls: {}".format(
+            ", ".join(NAMES[direction] for direction, _, _ in walls) or "none"))
         state = backend.hub.get_latest_state()
         if (any(abs(speed) > MAX_STATIONARY_SPEED_MPS
                 for speed in (state.vel_vx, state.vel_vy, state.vel_vz))
                 or abs(wrap(state.yaw - wrap(heading * 90))) > FRONT_VIEW_TOLERANCE_DEG):
+            print("[Sign scan] Skipped: chassis is moving or heading is not aligned")
             return scan_result
 
         yaw_for_relative_direction = {0: 0, 1: 90, 2: -180, 3: -90}
@@ -149,7 +164,7 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
 
                 with lock:
                     inspection.update({
-                        "active": True,
+                        "active": False,
                         "cell": tuple(explorer.slam.cell),
                         "direction": direction,
                         "tof_distance_mm": distance_mm,
@@ -165,7 +180,6 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
                     NAMES[direction], tuple(explorer.slam.cell),
                     sweep_yaws, SIGN_INSPECTION_TIMEOUT_SEC,
                 ))
-                deadline = time.monotonic() + SIGN_INSPECTION_TIMEOUT_SEC
                 dwell_per_yaw = SIGN_INSPECTION_TIMEOUT_SEC / max(1, len(sweep_yaws))
                 for sweep_yaw in sweep_yaws:
                     if finished.is_set() or not backend.controller._running.is_set():
@@ -173,18 +187,19 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
                     with lock:
                         inspection["active"] = False
                     try:
-                        sweep_action = robot.gimbal.moveto(
-                            pitch=SIGN_LOOK_DOWN_PITCH_DEG,
-                            yaw=sweep_yaw,
-                            pitch_speed=setting("gimbal.pitch_speed_dps"),
-                            yaw_speed=setting("gimbal.yaw_speed_dps"),
-                        )
-                        sweep_completed = sweep_action.wait_for_completed(
-                            timeout=setting("gimbal.action_timeout_sec")
-                        )
-                        if (sweep_completed is False
-                                or getattr(sweep_action, "has_succeeded", True) is False):
-                            continue
+                        if sweep_yaw != camera_yaw:
+                            sweep_action = robot.gimbal.moveto(
+                                pitch=SIGN_LOOK_DOWN_PITCH_DEG,
+                                yaw=sweep_yaw,
+                                pitch_speed=setting("gimbal.pitch_speed_dps"),
+                                yaw_speed=setting("gimbal.yaw_speed_dps"),
+                            )
+                            sweep_completed = sweep_action.wait_for_completed(
+                                timeout=setting("gimbal.action_timeout_sec")
+                            )
+                            if (sweep_completed is False
+                                    or getattr(sweep_action, "has_succeeded", True) is False):
+                                continue
                         time.sleep(setting("gimbal.settle_sec"))
                         with lock:
                             inspection["cell"] = tuple(explorer.slam.cell)
@@ -192,9 +207,7 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
                             inspection["tof_distance_mm"] = distance_mm
                             inspection["camera_yaw"] = sweep_yaw
                             inspection["active"] = True
-                        dwell_deadline = min(
-                            deadline, time.monotonic() + dwell_per_yaw
-                        )
+                        dwell_deadline = time.monotonic() + dwell_per_yaw
                         while time.monotonic() < dwell_deadline:
                             if finished.wait(min(0.02, dwell_deadline - time.monotonic())):
                                 break
@@ -464,6 +477,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
     worker = threading.Thread(target=explore, name="maze-explorer", daemon=True)
     worker.start()
     announced = False
+    window_created = False
 
     try:
         print("Camera is live. Press 'q' to stop/close the mission window.")
@@ -518,7 +532,8 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                             snap_idx = len(captured_snapshots[key]) + 1
                             cell_str = "c{}_{}".format(current_cell[0], current_cell[1])
                             img_name = "{}_{}_{}_{}_snap{}.jpg".format(
-                                cell_str, dir_str, detection["color"], detection["shape"], snap_idx
+                                cell_str, NAMES[current_direction], detection["color"],
+                                detection["shape"], snap_idx
                             )
                             img_path = captured_signs_dir / img_name
                             try:
@@ -577,6 +592,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                             0.55, (0, 255, 255), 2, cv2.LINE_AA)
                 combined = build_side_by_side_view(result, mask)
                 cv2.imshow("RoboMaster - Camera & Sign Mask", combined)
+                window_created = True
                 if detections:
                     labels = sorted(set(
                         "{} {}".format(item["color"], item["shape"])
@@ -594,9 +610,11 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                 print("Map saved to: {}".format(explorer.output))
                 announced = True
 
+            # Let OpenCV create/update the window before checking whether it was closed.
+            key = cv2.waitKey(1) & 0xFF
             # Check if user closed the OpenCV window via the [X] title-bar button
             try:
-                if cv2.getWindowProperty("RoboMaster - Camera & Sign Mask", cv2.WND_PROP_VISIBLE) < 1:
+                if window_created and cv2.getWindowProperty("RoboMaster - Camera & Sign Mask", cv2.WND_PROP_VISIBLE) < 1:
                     print("[Camera] Window closed by user.")
                     inspection_finished.set()
                     if worker.is_alive() and stop_motion is not None:
@@ -612,7 +630,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                     stop_motion()
                 break
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            if key == ord("q"):
                 inspection_finished.set()
                 if worker.is_alive() and stop_motion is not None:
                     print("Stopping maze motion...")
@@ -623,6 +641,10 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                 break
             if not worker.is_alive():
                 break
+    except Exception:
+        print("[Camera] Unexpected error; stopping motion. Traceback:")
+        traceback.print_exc()
+        raise
     finally:
         inspection_finished.set()
         if worker.is_alive() and stop_motion is not None:

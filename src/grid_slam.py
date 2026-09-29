@@ -23,6 +23,16 @@ def wrap(deg):
     return (deg + 180) % 360 - 180
 
 
+class BlockedCellError(RuntimeError):
+    """A fresh front range prevents a planned cell move before motion starts."""
+
+    def __init__(self, distance_mm, stop_distance_mm):
+        self.distance_mm = distance_mm
+        self.stop_distance_mm = stop_distance_mm
+        super().__init__('Front obstacle at {:.0f} mm (stop limit {:.0f} mm)'.format(
+            distance_mm, stop_distance_mm))
+
+
 class GridMap:
     def __init__(self):
         self.edges = {}  # Canonical undirected edge -> wall present/absent.
@@ -298,6 +308,7 @@ class FrontierExplorer:
                     self.status = 'limit_reached'
                     break
                 # Walk each step of the planned route.
+                route_blocked = False
                 for i in range(1, len(route)):
                     target = route[i]
                     direction = next(d for d in range(4) if neighbor(route[i - 1], d) == target)
@@ -309,7 +320,20 @@ class FrontierExplorer:
                     self.slam.events.append({'timestamp': time.time(), 'type': 'motion_start',
                         'step': self.moves + 1, 'from': list(route[i - 1]), 'to': list(target),
                         'direction': direction, 'backtrack': target in self.slam.map.visited})
-                    displacement, yaw = self.backend.move(direction)
+                    try:
+                        displacement, yaw = self.backend.move(direction)
+                    except BlockedCellError as exc:
+                        edge = self.slam.map.edge(route[i - 1], direction)
+                        self.slam.map.edges[edge] = True
+                        self.slam.events.append({
+                            'timestamp': time.time(), 'type': 'front_obstacle',
+                            'cell': list(route[i - 1]), 'direction': NAMES[direction],
+                            'distance_mm': exc.distance_mm,
+                            'stop_distance_mm': exc.stop_distance_mm,
+                            'action': 'edge_closed_and_replan',
+                        })
+                        route_blocked = True
+                        break
                     self.slam.events.append({'timestamp': time.time(), 'type': 'move',
                         'from': list(route[i - 1]), 'to': list(target), 'direction': direction,
                         'backtrack': target in self.slam.map.visited,
@@ -318,6 +342,8 @@ class FrontierExplorer:
                     self.moves += 1
                 if self.status == 'limit_reached':
                     break
+                if route_blocked:
+                    continue
         except KeyboardInterrupt:
             self.status = 'interrupted'
         except Exception as exc:
