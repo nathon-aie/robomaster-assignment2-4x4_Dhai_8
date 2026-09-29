@@ -31,6 +31,8 @@ def select_operation():
     try:
         task = choose('RoboMaster EP — เลือกงาน (ค่าพื้นฐานอ่านจาก config/settings.yaml)', [
             ('สำรวจและสร้างแผนที่ SLAM + DFS', 'explore'),
+            ('สำรวจ SLAM + ตรวจจับเป้าหมาย (Auto Capture 3 รูป)', 'explore-detect'),
+            ('ทดสอบตรวจจับเป้าหมายจากกล้อง (Auto Capture 3 รูป)', 'detect-camera'),
             ('ทดสอบเดินหน้า 1 ช่อง', 'step-test'),
             ('ทดสอบเลี้ยว', 'turn-test'),
             ('ดูข้อมูลเซนเซอร์สด', 'monitor'),
@@ -41,8 +43,17 @@ def select_operation():
         ])
         if task is None:
             return None
-        if task == 'gimbal-test':
+        if task in ('gimbal-test', 'explore-detect'):
             return task, {}
+        if task == 'detect-camera':
+            cam_choice = choose('เลือกกล้องสำหรับตรวจจับ', [
+                ('กล้องหุ่นยนต์ RoboMaster (AP mode)', 'robot-ap'),
+                ('กล้องหุ่นยนต์ RoboMaster (STA mode)', 'robot-sta'),
+                ('เว็บแคมของคอมพิวเตอร์ (PC Webcam)', 'webcam'),
+            ])
+            if cam_choice is None:
+                return None
+            return task, {'mode': cam_choice}
         if task in ('explore', 'step-test', 'turn-test', 'monitor', 'motion'):
             if task == 'motion':
                 commands = input('คำสั่งเคลื่อนที่ เช่น fwd 1, right, fwd 1 (เว้นว่างเพื่อยกเลิก): ').strip()

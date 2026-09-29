@@ -223,13 +223,60 @@ def run_exploration():
     return 0 if success else 1
 
 
-def main():
+def run_exploration_detection(conn_type=None, mock=False):
+    """Explore with SLAM + camera sign detection (captures 3 confirmation images)."""
+    import slam_detect_camera
+    slam_detect_camera.clear_previous_captures()
+    conn_type = conn_type or setting('robot.conn_type')
+    calib = Path(project_path('paths.calibration'))
+    if not calib.is_absolute():
+        calib = Path(__file__).resolve().parent / calib
+    mission_dir = Path(project_path('paths.telemetry'))
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    output_path = mission_dir / f"run_detect_{timestamp}" / "explored_map.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if mock:
+            success = slam_detect_camera.run_simulation(camera_index=0, output=output_path)
+        else:
+            success = slam_detect_camera.run_hardware(conn_type, calib, output_path)
+        slam_detect_camera.render_map_image(output_path)
+        return 0 if success else 1
+    except Exception as exc:
+        print(f"[Explore-Detect] Error: {exc}")
+        return 1
+
+
+def run_camera_detection(mode: str = 'robot-ap'):
+    """Live target detection with 3 confirmation snapshots."""
+    import detect_camera
+    orig_argv = list(sys.argv)
+    if mode == 'webcam':
+        sys.argv = ['detect_camera.py', '--webcam']
+    elif mode == 'robot-sta':
+        sys.argv = ['detect_camera.py', '--conn-type', 'sta']
+    else:
+        sys.argv = ['detect_camera.py', '--conn-type', 'ap']
+    try:
+        detect_camera.main()
+        return 0
+    except Exception as exc:
+        print(f"[Detect-Camera] Error: {exc}")
+        return 1
+    finally:
+        sys.argv = orig_argv
+
+
+def run_menu():
+    """Interactive menu fallback."""
     selection = select_operation()
     if selection is None:
         return 0
     task, parameters = selection
     handlers = {
         'explore': run_exploration,
+        'explore-detect': run_exploration_detection,
+        'detect-camera': run_camera_detection,
         'step-test': test_step,
         'turn-test': test_turn,
         'monitor': monitor_sensors,
@@ -245,6 +292,68 @@ def main():
         return 0
     except (OSError, RuntimeError, ValueError) as exc:
         print('[main] {}'.format(exc), file=sys.stderr)
+        return 1
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="RoboMaster EP - ระบบสำรวจ Grid SLAM และตรวจจับเป้าหมาย (Auto Capture 3 รูป)"
+    )
+    parser.add_argument(
+        "--no-camera", action="store_true",
+        help="ให้หุ่นเคลื่อนที่สำรวจอย่างเดียว โดยไม่ต้องใช้กล้อง / ไม่ตรวจจับเป้าหมาย",
+    )
+    parser.add_argument(
+        "--conn-type", choices=("ap", "sta"), default=setting("robot.conn_type"),
+        help="โหมดการเชื่อมต่อหุ่นยนต์ (ap หรือ sta, ค่าเริ่มต้น: ap)",
+    )
+    parser.add_argument(
+        "--mock", action="store_true",
+        help="รันโหมดจำลอง (Simulator)",
+    )
+    parser.add_argument(
+        "--step", action="store_true",
+        help="ทดสอบเดินหน้า 1 ช่อง (เคลื่อนที่อย่างเดียว ไม่ใช้กล้อง)",
+    )
+    parser.add_argument(
+        "--turn", choices=("left", "right", "around"), default=None,
+        help="ทดสอบเลี้ยว (left=ซ้าย 90 องศา, right=ขวา 90 องศา, around=กลับหลัง 180 องศา)",
+    )
+    parser.add_argument(
+        "--menu", action="store_true",
+        help="เปิดเมนูเลือกคำสั่งแบบ Interactive Menu",
+    )
+    args, unknown = parser.parse_known_args()
+
+    try:
+        # 1. ถ้าสั่งเปิดเมนู
+        if args.menu:
+            return run_menu()
+
+        # 2. ถ้าสั่งทดสอบการเคลื่อนที่อย่างเดียว (เดิน 1 ช่อง หรือ เลี้ยว)
+        if args.step:
+            return test_step()
+        if args.turn:
+            return test_turn(args.turn)
+
+        # 3. ถ้าสั่งให้หุ่นเคลื่อนที่สำรวจอย่างเดียวโดยไม่ต้องใช้กล้อง
+        if args.no_camera:
+            print("[SLAM] เริ่มการสำรวจและสร้างแผนที่ (เคลื่อนที่อย่างเดียว ไม่ใช้กล้อง)")
+            return run_exploration()
+
+        # 4. ค่าเริ่มต้น (Default): รันการสำรวจ + ตรวจจับเป้าหมาย (แคปภาพ 3 รูป)
+        print("=" * 65)
+        print("🚀 เริ่มภารกิจ: สำรวจ Grid SLAM + ตรวจจับเป้าหมาย (Auto Capture 3 รูป)")
+        print(f"📡 โหมดเชื่อมต่อ: {args.conn_type.upper()}")
+        print("=" * 65)
+        return run_exploration_detection(conn_type=args.conn_type, mock=args.mock)
+
+    except (EOFError, KeyboardInterrupt):
+        print('\nหยุดการทำงานโดยผู้ใช้')
+        return 0
+    except Exception as exc:
+        print(f'[main] Error: {exc}', file=sys.stderr)
         return 1
 
 

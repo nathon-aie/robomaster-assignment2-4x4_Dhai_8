@@ -15,6 +15,7 @@ class HardwareBackend:
         self.collector = system.thread_1_sensor
         self.hub = system.sensor_hub
         self.heading = 0
+        self.grid_walk_count = 0
         self.event_log = []
         self.scan_headings = None
         self.scan_origin = None
@@ -357,6 +358,18 @@ class HardwareBackend:
         self.event_log.append(dict(result, timestamp=time.time(), type='walk_end'))
         if not result['completed']:
             raise RuntimeError('Cell motion failed: {}'.format(result['reason']))
+        self.grid_walk_count += 1
+        if self.grid_walk_count % 3 == 0:
+            target_yaw = wrap(self.heading * 90)
+            cur_state = self.hub.get_latest_state()
+            yaw_error = abs(wrap(target_yaw - cur_state.yaw))
+            print(f"\n[Navigation] 🧭 เดินครบ {self.grid_walk_count} Grid | ค่าเบี่ยงเบนหน้าหุ่น: {yaw_error:.2f}° (เกณฑ์รับได้ ±5°)")
+            print(f"[Navigation] 🔄 ดำเนินการจัดองศาหน้ารถ (Heading Alignment) ให้ตรงเป๊ะ...")
+            self.align_heading()
+            time.sleep(setting("navigation.turn_settle_sec"))
+            final_state = self.hub.get_latest_state()
+            final_error = abs(wrap(target_yaw - final_state.yaw))
+            print(f"[Navigation] ✅ จัดองศาหน้ารถเรียบร้อย (Yaw ปัจจุบัน: {final_state.yaw:.2f}°, Error: {final_error:.2f}°)")
         after = self.prepare_stationary_scan()
         return (after.pos_x - before.pos_x, after.pos_y - before.pos_y), after.yaw
 

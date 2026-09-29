@@ -290,6 +290,13 @@ class RobotControllerThread(threading.Thread):
             result = self.navigate_single_grid_step(step_idx=i, total_steps=cells)
             if not result["completed"]:
                 raise RuntimeError("Grid motion failed: {}".format(result["reason"]))
+            if i % 3 == 0 and i < cells:
+                cur_state = self.motion_state()
+                raw_yaw_diff = self.target_heading_deg - cur_state.yaw
+                yaw_error = abs((raw_yaw_diff + 180.0) % 360.0 - 180.0)
+                print(f"\n[Controller] 🧭 เดินครบ {i} Grid | ค่าเบี่ยงเบนหน้าหุ่น: {yaw_error:.2f}° (เกณฑ์รับได้ ±5°)")
+                print(f"[Controller] 🔄 ทำการจัดองศาหน้ารถ (Heading Re-alignment)...")
+                self.align_at_cell_center(duration_sec=setting("navigation.align_default_duration_sec"))
             if i < cells and self.step_pause_sec > 0:
                 print(f"[Controller] ⏸️ Pausing {self.step_pause_sec:.1f}s before next grid step...")
                 time.sleep(self.step_pause_sec)
