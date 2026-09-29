@@ -24,7 +24,7 @@ sensors:
 
 navigation:
   grid_size_m: 0.60
-  base_speed_mps: 0.28
+  base_speed_mps: 0.35
   step_test_speed_mps: 0.22
   control_rate_hz: 20
   max_heading_error_deg: 15
@@ -69,6 +69,7 @@ calibration:
 
 gimbal:
   test_cycles: 2
+  front_yaw_tolerance_deg: 5
   recenter_yaw_speed_dps: 300
   recenter_pitch_speed_dps: 120
   # chassis: turn in place with ToF facing forward; gimbal: requires full yaw range

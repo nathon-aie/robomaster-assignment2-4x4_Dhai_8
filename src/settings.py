@@ -73,6 +73,11 @@ if get("slam.localization_gate_m") >= get("navigation.grid_size_m") / 2:
     raise ValueError("Localization gate must be less than half a cell")
 if get("gimbal.settle_sec") < 0:
     raise ValueError("gimbal.settle_sec must not be negative")
+front_yaw_tolerance = get("gimbal.front_yaw_tolerance_deg")
+if (isinstance(front_yaw_tolerance, bool)
+        or not isinstance(front_yaw_tolerance, (int, float))
+        or not 0 < front_yaw_tolerance <= 15):
+    raise ValueError("gimbal.front_yaw_tolerance_deg must be within (0, 15]")
 if get("sensors.rate_hz") not in (1, 5, 10, 20, 50):
     raise ValueError("Sensor rate must be supported by RoboMaster SDK: 1, 5, 10, 20, 50")
 

@@ -3,7 +3,7 @@ import math
 import statistics
 import time
 from .grid_slam import wrap
-from .sdk_connection import cancel_chassis_speed_timer, stop_chassis_wheels
+from .sdk_connection import cancel_chassis_speed_timer, load_robot_sdk, stop_chassis_wheels
 from .settings import get as setting
 
 
@@ -138,6 +138,37 @@ class HardwareBackend:
             self.commanded_gimbal_yaw = 0.0
             self.log_gimbal('front_position_hold', 0, self.hub.get_latest_state())
 
+    def select_robot_mode(self, mode, phase):
+        """Confirm the SDK mode before scanning or chassis motion."""
+        if self.robot.set_robot_mode(mode=mode) is not True:
+            raise RuntimeError('Cannot set robot mode {} for {}'.format(mode, phase))
+        actual_mode = self.robot.get_robot_mode()
+        self.event_log.append({'timestamp': time.time(), 'type': 'robot_mode',
+                               'phase': phase, 'mode': actual_mode})
+        if actual_mode != mode:
+            raise RuntimeError('Robot mode for {} is {}, expected {}'.format(
+                phase, actual_mode, mode))
+
+    def ensure_gimbal_front(self, phase, restore_follow_mode=False):
+        """Keep the commanded scan reference and front ToF aligned to the chassis."""
+        state = self.gimbal_state(after=time.monotonic())
+        if abs(wrap(state.gimbal_yaw)) > setting('gimbal.front_yaw_tolerance_deg'):
+            self.event_log.append({'timestamp': time.time(), 'type': 'gimbal_front_misalignment',
+                                   'phase': phase,
+                                   'relative_yaw': state.gimbal_yaw,
+                                   'ground_yaw': state.gimbal_yaw_ground,
+                                   'chassis_yaw': state.yaw})
+            if restore_follow_mode:
+                self.select_robot_mode(load_robot_sdk().FREE, 'before_gimbal_recovery')
+            self.recenter_gimbal(name='Gimbal recenter for ' + phase)
+            if restore_follow_mode:
+                self.select_robot_mode(load_robot_sdk().CHASSIS_LEAD, 'after_gimbal_recovery')
+            state = self.gimbal_state(after=time.monotonic())
+        if abs(wrap(state.gimbal_yaw)) > setting('gimbal.front_yaw_tolerance_deg'):
+            raise RuntimeError('Gimbal does not face front for {}: {:.1f} deg'.format(
+                phase, state.gimbal_yaw))
+        self.commanded_gimbal_yaw = 0.0
+
     def aim(self, yaw, direct=False):
         """Execute planned relative moves only; never trim from angle feedback."""
         self.ensure_running()
@@ -149,6 +180,7 @@ class HardwareBackend:
             # Split the planned travel only, e.g. rear -> centre = two 90s.
             # Subsequent commands use the commanded reference, not measured error.
             remaining = yaw - self.commanded_gimbal_yaw
+            moved = False
             while abs(remaining) > 0.01:
                 step = remaining if direct else max(-setting('gimbal.move_step_deg'), min(setting('gimbal.move_step_deg'), remaining))
                 state = self.gimbal_state()
@@ -157,12 +189,14 @@ class HardwareBackend:
                     yaw=step, pitch=0, yaw_speed=setting('gimbal.yaw_speed_dps'),
                     pitch_speed=setting('gimbal.pitch_speed_dps')), name='Gimbal move action')
                 self.commanded_gimbal_yaw += step
+                moved = True
                 remaining = yaw - self.commanded_gimbal_yaw
             # Read angle telemetry for diagnostics only.
-            deadline = time.monotonic() + setting('gimbal.settle_sec')
-            while time.monotonic() < deadline:
-                self.ensure_running()
-                time.sleep(min(0.01, max(0, deadline - time.monotonic())))
+            if moved:
+                deadline = time.monotonic() + setting('gimbal.settle_sec')
+                while time.monotonic() < deadline:
+                    self.ensure_running()
+                    time.sleep(min(0.01, max(0, deadline - time.monotonic())))
             state = self.gimbal_state()
             self.log_gimbal('move_completed', yaw, state)
             self.collector.reset_tof_filter()
@@ -254,6 +288,7 @@ class HardwareBackend:
             self.align_heading()
         else:
             cancel_chassis_speed_timer(self.robot.chassis)
+            self.select_robot_mode(load_robot_sdk().FREE, 'before_gimbal_scan')
             if not getattr(self, 'gimbal_reference_ready', False):
                 state = self.wait_stationary_pose(settle_sec=setting('slam.startup_settle_sec'))
             else:
@@ -261,6 +296,8 @@ class HardwareBackend:
             self.scan_origin = (state.pos_x, state.pos_y, state.yaw)
             self.scan_position_warning_logged = False
             self.ensure_running()
+            if self.gimbal_reference_ready:
+                self.ensure_gimbal_front('before_gimbal_scan')
         start_heading = self.heading
         scan_rear = not getattr(self, 'initial_scan_completed', False)
         ranges = {}
@@ -277,20 +314,25 @@ class HardwareBackend:
                     self.scan_headings[direction] = self.heading
                 self.face(start_heading)
             else:
-                # Keep CHASSIS_LEAD, as in the reference repo. No chassis
-                # rotation commands or mode switches are issued during this scan.
+                # FREE permits yaw scans while the chassis stays stationary.
+                # No chassis rotation commands are issued during this scan.
                 if not getattr(self, 'gimbal_reference_ready', False):
                     self.initialize_gimbal_reference()
-                else:
-                    self.recenter_gimbal()
-                # Initial sweep: left -> rear -> directly right, without revisiting left.
-                directions = ((0, 0), (3, -90), (2, -180), (1, 90)) if scan_rear else ((0, 0), (3, -90), (1, 90))
+                # Establish the Gimbal reference once at startup. Each scan then
+                # starts from the front position left by the previous scan/move.
+                # Sweep left first; include the rear only on the initial scan.
+                directions = ((3, -90), (2, -180), (1, 90)) if scan_rear else ((3, -90), (1, 90))
                 for relative, yaw in directions:
                     direction = (start_heading + relative) % 4
                     ranges[direction] = self.sample(yaw, self.aim(yaw, direct=(yaw == 90)))
                     self.scan_headings[direction] = start_heading
+                # Recenter once after the sweep and use this fresh front reading
+                # as the scan result, instead of sampling the front twice.
                 self.recenter_gimbal()
-            self.sample(0, self.aim(0))
+                ranges[start_heading] = self.sample(0, self.aim(0))
+                self.scan_headings[start_heading] = start_heading
+            if mode == 'chassis':
+                self.sample(0, self.aim(0))
             self.ensure_running()
             state = self.hub.get_latest_state()
             completed = True
@@ -337,6 +379,7 @@ class HardwareBackend:
 
     def move(self, direction):
         self.hold_front_for_motion()
+        self.select_robot_mode(load_robot_sdk().CHASSIS_LEAD, 'before_motion')
         turn = (direction - self.heading) % 4
         if turn:
             self.event_log.append({'timestamp': time.time(), 'type': 'chassis_turn',
@@ -344,6 +387,7 @@ class HardwareBackend:
             self.controller.turn_to_relative({1: -90, 2: 180, 3: 90}[turn])
         self.heading = direction
         self.align_heading()
+        self.ensure_gimbal_front('after_chassis_turn' if turn else 'before_motion', restore_follow_mode=True)
         distance = self.sample(0, self.aim(0))
         if distance * 1000 <= setting('navigation.front_target_mm'):
             raise RuntimeError('Front obstacle prevents entering the next cell')
