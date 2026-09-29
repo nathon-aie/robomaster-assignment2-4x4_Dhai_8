@@ -15,7 +15,6 @@ class HardwareBackend:
         self.collector = system.thread_1_sensor
         self.hub = system.sensor_hub
         self.heading = 0
-        self.grid_walk_count = 0
         self.event_log = []
         self.scan_headings = None
         self.scan_origin = None
@@ -63,12 +62,8 @@ class HardwareBackend:
                                        'position_m': [state.pos_x, state.pos_y]})
                 self.scan_position_warning_logged = True
             if yaw_drift > setting('scan_guard.max_heading_drift_deg'):
-                self.event_log.append({'timestamp': time.time(), 'type': 'scan_yaw_drift_warning',
-                                       'yaw_drift_deg': yaw_drift})
-                print(f"\n[Scan Guard] ⚠️ ตรวจพบ Yaw Drift ({yaw_drift:.2f}° > {setting('scan_guard.max_heading_drift_deg')}°) ทำการ Align Heading ใหม่อัตโนมัติ...")
-                self.align_heading()
-                refreshed = self.hub.get_latest_state()
-                origin = (origin[0], origin[1], refreshed.yaw)
+                raise RuntimeError('Stationary scan: chassis moved (yaw drift={:.2f} deg, position drift={:.3f} m)'.format(
+                    yaw_drift, position_drift))
         return waited
 
     def fresh(self, state, fields):
@@ -241,14 +236,6 @@ class HardwareBackend:
                 speed = max(-20.0, min(20.0, error * 1.8))
                 self.controller.drive_speed(0, 0, speed)
                 time.sleep(0.05)
-            # If deadline reached, check if error is within user acceptable tolerance (+-5 deg)
-            state = self.hub.get_latest_state()
-            if self.fresh(state, ['attitude_received_at']) and math.isfinite(state.yaw):
-                final_err = abs(wrap(target - state.yaw))
-                if final_err <= 5.0:
-                    self.controller.target_heading_deg = target
-                    print(f"\n[Heading] ⚠️ ปรับองศาเข้าเกณฑ์ปลอดภัย (Error: {final_err:.2f}° <= ±5°) ดำเนินการต่อได้")
-                    return
             raise RuntimeError('Chassis heading alignment timed out')
         finally:
             self.controller.stop_chassis()
@@ -370,18 +357,6 @@ class HardwareBackend:
         self.event_log.append(dict(result, timestamp=time.time(), type='walk_end'))
         if not result['completed']:
             raise RuntimeError('Cell motion failed: {}'.format(result['reason']))
-        self.grid_walk_count += 1
-        if self.grid_walk_count % 3 == 0:
-            target_yaw = wrap(self.heading * 90)
-            cur_state = self.hub.get_latest_state()
-            yaw_error = abs(wrap(target_yaw - cur_state.yaw))
-            print(f"\n[Navigation] 🧭 เดินครบ {self.grid_walk_count} Grid | ค่าเบี่ยงเบนหน้าหุ่น: {yaw_error:.2f}° (เกณฑ์รับได้ ±5°)")
-            print(f"[Navigation] 🔄 ดำเนินการจัดองศาหน้ารถ (Heading Alignment) ให้ตรงเป๊ะ...")
-            self.align_heading()
-            time.sleep(setting("navigation.turn_settle_sec"))
-            final_state = self.hub.get_latest_state()
-            final_error = abs(wrap(target_yaw - final_state.yaw))
-            print(f"[Navigation] ✅ จัดองศาหน้ารถเรียบร้อย (Yaw ปัจจุบัน: {final_state.yaw:.2f}°, Error: {final_error:.2f}°)")
         after = self.prepare_stationary_scan()
         return (after.pos_x - before.pos_x, after.pos_y - before.pos_y), after.yaw
 

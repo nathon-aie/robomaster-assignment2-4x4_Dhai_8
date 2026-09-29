@@ -146,9 +146,10 @@ class CalibrationSession:
             self.robot = candidate
         return self.robot
 
-    def collect(self, sensor, output, board_id, port, tof_index, samples):
+    def collect(self, sensor, output, board_id, port, tof_index, samples, reference_provider=None):
         return collect_live(sensor, output, board_id, port, tof_index, samples,
-                            self.conn_type, ep_robot=self.connect())
+                            self.conn_type, ep_robot=self.connect(),
+                            reference_provider=reference_provider)
 
     def close(self):
         if self.robot is not None:
@@ -156,7 +157,8 @@ class CalibrationSession:
             _close_robot(robot)
 
 
-def collect_live(sensor, output, board_id, port, tof_index, samples, conn_type, ep_robot=None):
+def collect_live(sensor, output, board_id, port, tof_index, samples, conn_type,
+                 ep_robot=None, reference_provider=None):
     """Collect samples; q stops the job. Borrowed session connections stay open."""
     if sensor not in ("sharp_left", "sharp_right", "tof"):
         raise ValueError("live collection supports sharp_left, sharp_right, and tof")
@@ -187,7 +189,8 @@ def collect_live(sensor, output, board_id, port, tof_index, samples, conn_type, 
             sensor_id = board_id if board_id is not None else setting("sensors." + sensor + ".board_id")
             sensor_port = port if port is not None else setting("sensors." + sensor + ".port")
         for sample_id in range(1, samples + 1):
-            reference = _reference_distance(sensor, sample_id)
+            reference = (reference_provider(sensor, sample_id) if reference_provider
+                         else _reference_distance(sensor, sample_id))
             if reference is None:
                 print("[calibration] หยุดเก็บค่า บันทึกแล้ว {} ตัวอย่าง".format(collected))
                 return collected

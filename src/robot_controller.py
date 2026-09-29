@@ -290,13 +290,6 @@ class RobotControllerThread(threading.Thread):
             result = self.navigate_single_grid_step(step_idx=i, total_steps=cells)
             if not result["completed"]:
                 raise RuntimeError("Grid motion failed: {}".format(result["reason"]))
-            if i % 3 == 0 and i < cells:
-                cur_state = self.motion_state()
-                raw_yaw_diff = self.target_heading_deg - cur_state.yaw
-                yaw_error = abs((raw_yaw_diff + 180.0) % 360.0 - 180.0)
-                print(f"\n[Controller] 🧭 เดินครบ {i} Grid | ค่าเบี่ยงเบนหน้าหุ่น: {yaw_error:.2f}° (เกณฑ์รับได้ ±5°)")
-                print(f"[Controller] 🔄 ทำการจัดองศาหน้ารถ (Heading Re-alignment)...")
-                self.align_at_cell_center(duration_sec=setting("navigation.align_default_duration_sec"))
             if i < cells and self.step_pause_sec > 0:
                 print(f"[Controller] ⏸️ Pausing {self.step_pause_sec:.1f}s before next grid step...")
                 time.sleep(self.step_pause_sec)
@@ -305,27 +298,60 @@ class RobotControllerThread(threading.Thread):
         """Closed-loop relative in-place turn (+90 Left, -90 Right, 180 Around)."""
         # In DJI SDK: z=+90 rotates CCW (yaw becomes -90°), z=-90 rotates CW (yaw becomes +90°)
         expected_yaw_delta = deg * setting("robot.yaw_command_sign")
-        self.target_heading_deg = (self.target_heading_deg + expected_yaw_delta + 180.0) % 360.0 - 180.0
+        target_heading = (self.target_heading_deg + expected_yaw_delta + 180.0) % 360.0 - 180.0
         self.current_action = f"TURN_{deg:+.0f}_DEG"
         dir_name = "Left (เลี้ยวซ้าย z=+90)" if deg > 0 else ("Right (เลี้ยวขวา z=-90)" if deg < 0 else "Around (กลับหลัง z=180)")
-        print(f"\n[Controller] 🔄 Executing Turn {dir_name}: z={deg:+.0f}° -> Target Heading: {self.target_heading_deg:.0f}°...")
+        print(f"\n[Controller] 🔄 Executing Turn {dir_name}: z={deg:+.0f}° -> Target Heading: {target_heading:.0f}°...")
 
-        action = self.robot.chassis.move(x=0, y=0, z=deg, z_speed=speed)
-        if not action.wait_for_completed(timeout=setting("gimbal.action_timeout_sec")) or not action.has_succeeded:
-            raise RuntimeError("Chassis turn failed or timed out")
+        try:
+            action = self.robot.chassis.move(x=0, y=0, z=deg, z_speed=speed)
+            if not action.wait_for_completed(timeout=setting("gimbal.action_timeout_sec")) or not action.has_succeeded:
+                raise RuntimeError("Chassis turn failed or timed out")
 
-        # Stop chassis and reset PID states cleanly
-        self.stop_chassis()
-        self.wall_pid.reset()
-        time.sleep(setting("navigation.turn_settle_sec"))
+            self.stop_chassis()
+            time.sleep(setting("navigation.turn_settle_sec"))
+            end_state = self.align_turn_heading(target_heading)
+            self.target_heading_deg = target_heading
+            print(f"[Controller] ✅ Turn Completed: Current Yaw = {end_state.yaw:+.1f}° (Target Grid Heading = {target_heading:.0f}°)\n")
+        finally:
+            self.stop_chassis()
+            self.wall_pid.reset()
 
-        # Snap target heading to nearest 90-deg grid axis of current yaw
-        end_state = self.sensor_hub.get_latest_state()
-        if end_state.yaw is not None:
-            snapped_target = round(end_state.yaw / 90.0) * 90.0
-            self.target_heading_deg = (snapped_target + 180.0) % 360.0 - 180.0
+    def align_turn_heading(self, target_heading: float):
+        """Correct a completed turn using fresh yaw until the chassis settles on target."""
+        deadline = time.monotonic() + setting("slam.heading_align_timeout_sec")
+        tolerance = setting("slam.heading_tolerance_deg")
+        # Require feedback received after entering the correction phase.
+        last_attitude_at = time.monotonic()
+        within_tolerance = 0
 
-        print(f"[Controller] ✅ Turn Completed: Current Yaw = {end_state.yaw:+.1f}° (Target Grid Heading = {self.target_heading_deg:.0f}°)\n")
+        while time.monotonic() < deadline and self._running.is_set():
+            state = self.sensor_hub.get_latest_state()
+            now = time.monotonic()
+            if not 0 < state.attitude_received_at <= now or now - state.attitude_received_at > setting("slam.max_sensor_age_sec"):
+                raise RuntimeError("Stale chassis attitude during turn alignment")
+            if not math.isfinite(state.yaw):
+                raise RuntimeError("Invalid chassis yaw during turn alignment")
+            if state.attitude_received_at <= last_attitude_at:
+                time.sleep(0.01)
+                continue
+            last_attitude_at = state.attitude_received_at
+
+            error = (target_heading - state.yaw + 180.0) % 360.0 - 180.0
+            if abs(error) <= tolerance:
+                self.stop_chassis()
+                within_tolerance += 1
+                if within_tolerance >= 3:
+                    return state
+            else:
+                within_tolerance = 0
+                correction_speed = max(4.0, min(15.0, abs(error) * 1.8))
+                self.drive_speed(0.0, 0.0, math.copysign(correction_speed, error))
+            time.sleep(0.01)
+
+        if not self._running.is_set():
+            raise RuntimeError("Chassis turn was interrupted")
+        raise RuntimeError("Chassis heading alignment timed out")
 
     def turn_left(self, deg: float = 90.0, speed: float = setting("navigation.turn_speed_dps")):
         """เลี้ยวซ้าย z = +90 องศา."""
