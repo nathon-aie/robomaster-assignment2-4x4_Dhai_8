@@ -38,6 +38,7 @@ MAX_FRAME_AREA_RATIO = 0.30
 MIN_SOLIDITY = 0.85
 MIN_ELLIPSE_IOU = 0.80
 MIN_RECTANGULARITY = 0.78
+VERTICAL_RECT_MAX_ASPECT_RATIO = 0.92
 MIN_COLOR_CONFIDENCE = 0.45
 MIN_COLOR_PURITY = 0.75
 MIN_DARK_COLOR_VALUE = 24
@@ -242,11 +243,13 @@ def classify_shape_perspective(contour, frame_shape):
         horizontal, vertical = (rw, rh) if abs(math.cos(angle)) >= abs(math.sin(angle)) else (rh, rw)
         aspect_ratio = horizontal / float(vertical)
 
-        if 0.82 <= aspect_ratio <= 1.32:
+        # Close vertical signs can appear wider in the image (about 0.87 in
+        # recorded frames), so keep them out of the square range.
+        if VERTICAL_RECT_MAX_ASPECT_RATIO <= aspect_ratio <= 1.32:
             shape_name = "Square"
         elif aspect_ratio >= 1.50:
             shape_name = "Horizontal_Rect"
-        elif aspect_ratio < 0.82:
+        elif aspect_ratio < VERTICAL_RECT_MAX_ASPECT_RATIO:
             shape_name = "Vertical_Rect"
         else:
             return None

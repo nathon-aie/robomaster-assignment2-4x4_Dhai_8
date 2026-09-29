@@ -33,13 +33,13 @@ navigation:
   tolerance_mm: 20
   side_wall_threshold_mm: 280
   front_wall_threshold_mm: 350
-  front_target_mm: 200
-  emergency_front_mm: 150
+  front_target_mm: 250
+  emergency_front_mm: 200
   front_stop_tolerance_mm: 20
   # A ToF wall stop after halfway can finish a cell despite odometry drift
   front_wall_arrival_min_fraction: 0.5
-  front_deceleration_mm: 150
-  end_deceleration_m: 0.12
+  front_deceleration_mm: 200
+  end_deceleration_m: 0.20
   minimum_forward_speed_mps: 0.08
   minimum_front_speed_mps: 0.05
   timeout_multiplier: 1.8
@@ -49,6 +49,8 @@ navigation:
   step_pause_sec: 1.0
   turn_speed_dps: 90
   turn_settle_sec: 0.30
+  face_zero_every_cells: 2
+  face_zero_tolerance_deg: 5
   duration_sec: 0
 
 pid:

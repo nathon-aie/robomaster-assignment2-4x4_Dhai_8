@@ -39,6 +39,15 @@ def action_steps(data):
             elif kind == 'chassis_turn':
                 degrees = e['degrees']
                 actions.append('TURN {} {} deg'.format('right' if degrees < 0 else 'around' if abs(degrees) == 180 else 'left', abs(degrees)))
+            elif kind == 'face_zero_start':
+                actions.append('ALIGN chassis to 0 deg after {} moves'.format(e['after_moves']))
+            elif kind == 'face_zero':
+                actions.append('ALIGN verified: yaw {:+.1f} deg (tolerance +/-{:.1f} deg)'.format(
+                    e['yaw_deg'], e['tolerance_deg']))
+                heading = 0
+            elif kind == 'sign_inspection':
+                actions.append('CAMERA {} wall: {} frame(s), detected in {}'.format(
+                    e['direction'], e['frames'], e['detected_frames']))
             elif kind == 'walk_start':
                 actions.append('WALK {} | nominal {:.2f} m | Sharp centering + ToF guard'.format(NAMES[e['direction']], e['cell_size_m']))
             elif kind == 'walk_end':

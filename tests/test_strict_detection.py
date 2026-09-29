@@ -23,6 +23,20 @@ class StrictDetectionTest(unittest.TestCase):
                             [[235, 200]], [[100, 200]]], dtype=np.int32)
         self.assertIsNone(classify_shape_perspective(contour, (400, 400)))
 
+    def test_close_vertical_rectangle_is_not_called_square(self):
+        contour = np.array([[[100, 100]], [[187, 100]],
+                            [[187, 200]], [[100, 200]]], dtype=np.int32)
+        result = classify_shape_perspective(contour, (400, 400))
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], "Vertical_Rect")
+
+    def test_slightly_tall_square_remains_square(self):
+        contour = np.array([[[100, 100]], [[195, 100]],
+                            [[195, 200]], [[100, 200]]], dtype=np.int32)
+        result = classify_shape_perspective(contour, (400, 400))
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], "Square")
+
     def test_very_dark_green_sign_on_light_wall(self):
         frame = np.full((400, 500, 3), 220, dtype=np.uint8)
         cv2.circle(frame, (250, 200), 45, (4, 30, 6), -1)
@@ -38,6 +52,26 @@ class StrictDetectionTest(unittest.TestCase):
         examples = (
             ("c5_3_N_Green_Circle_snap3.jpg", "Green", "Square"),
             ("c5_1_E_Yellow_Square_snap2.jpg", "Yellow", "Vertical_Rect"),
+        )
+        if any(not (captures / filename).is_file() for filename, _, _ in examples):
+            self.skipTest("recorded camera frames are unavailable")
+        for filename, color, shape in examples:
+            with self.subTest(filename=filename):
+                frame = cv2.imread(str(captures / filename))
+                self.assertIsNotNone(frame)
+                detections = detect_signs(frame)[2]
+                self.assertIn((color, shape),
+                              {(item["color"], item["shape"]) for item in detections})
+
+    def test_close_range_recorded_shapes(self):
+        captures = (Path(__file__).resolve().parents[1] / "telemetry_logs"
+                    / "run_detect_20260930_024226" / "captured_signs")
+        examples = (
+            ("c5_1_E_Yellow_Square_snap1.jpg", "Yellow", "Vertical_Rect"),
+            ("c5_1_E_Yellow_Square_snap2.jpg", "Yellow", "Vertical_Rect"),
+            ("c5_1_E_Yellow_Square_snap3.jpg", "Yellow", "Vertical_Rect"),
+            ("c0_0_S_Red_Square_snap3.jpg", "Red", "Square"),
+            ("c3_5_W_Yellow_Square_snap3.jpg", "Yellow", "Square"),
         )
         if any(not (captures / filename).is_file() for filename, _, _ in examples):
             self.skipTest("recorded camera frames are unavailable")

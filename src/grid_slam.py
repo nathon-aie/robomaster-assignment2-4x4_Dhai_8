@@ -339,6 +339,28 @@ class FrontierExplorer:
                     'backtrack': backtrack, 'odometry_delta_m': list(displacement), 'yaw': yaw})
                 self.slam.predict(target, displacement, yaw)
                 self.moves += 1
+                interval = setting('navigation.face_zero_every_cells')
+                if (interval > 0 and self.moves % interval == 0
+                        and hasattr(self.backend, 'face_zero')):
+                    tolerance = setting('navigation.face_zero_tolerance_deg')
+                    self.slam.events.append({'timestamp': time.time(),
+                                             'type': 'face_zero_start',
+                                             'after_moves': self.moves,
+                                             'cell': list(self.slam.cell)})
+                    aligned_yaw = self.backend.face_zero(tolerance)
+                    if abs(wrap(aligned_yaw)) > tolerance:
+                        raise RuntimeError('Chassis zero alignment outside tolerance')
+                    self.slam.heading = 0
+                    self.slam.pose[2] = aligned_yaw
+                    if (self.slam.trajectory
+                            and self.slam.trajectory[-1]['cell'] == list(self.slam.cell)):
+                        self.slam.trajectory[-1]['pose'][2] = aligned_yaw
+                    self.slam.events.append({'timestamp': time.time(),
+                                             'type': 'face_zero',
+                                             'after_moves': self.moves,
+                                             'cell': list(self.slam.cell),
+                                             'yaw_deg': aligned_yaw,
+                                             'tolerance_deg': tolerance})
         except KeyboardInterrupt:
             self.status = 'interrupted'
         except Exception as exc:

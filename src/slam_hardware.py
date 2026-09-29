@@ -20,6 +20,7 @@ class HardwareBackend:
         self.scan_origin = None
         self.scan_position_warning_logged = False
         self.initial_scan_completed = False
+        self.force_full_scan = False
         self.gimbal_reference_ready = False
         self.commanded_gimbal_yaw = None
         self.controller.strict_sensors = True
@@ -253,24 +254,11 @@ class HardwareBackend:
 
     def align_heading(self):
         # Chassis remains at the cell centre; lateral PID is disabled during turns.
-        deadline = time.monotonic() + setting('slam.heading_align_timeout_sec')
         target = wrap(self.heading * 90)
         try:
-            while time.monotonic() < deadline:
-                self.ensure_running()
-                state = self.hub.get_latest_state()
-                if not self.fresh(state, ['attitude_received_at']):
-                    raise RuntimeError('Stale chassis attitude')
-                if not math.isfinite(state.yaw):
-                    raise RuntimeError('Invalid chassis yaw')
-                error = wrap(target - state.yaw)
-                if abs(error) <= setting('slam.heading_tolerance_deg'):
-                    self.controller.target_heading_deg = target
-                    return
-                speed = max(-20.0, min(20.0, error * 1.8))
-                self.controller.drive_speed(0, 0, speed)
-                time.sleep(0.05)
-            raise RuntimeError('Chassis heading alignment timed out')
+            self.ensure_running()
+            self.controller.align_turn_heading(target)
+            self.controller.target_heading_deg = target
         finally:
             self.controller.stop_chassis()
 
@@ -299,7 +287,8 @@ class HardwareBackend:
             if self.gimbal_reference_ready:
                 self.ensure_gimbal_front('before_gimbal_scan')
         start_heading = self.heading
-        scan_rear = not getattr(self, 'initial_scan_completed', False)
+        scan_rear = (not getattr(self, 'initial_scan_completed', False)
+                     or getattr(self, 'force_full_scan', False))
         ranges = {}
         self.scan_headings = {}
         completed = False
@@ -320,16 +309,16 @@ class HardwareBackend:
                     self.initialize_gimbal_reference()
                 # Establish the Gimbal reference once at startup. Each scan then
                 # starts from the front position left by the previous scan/move.
-                # Sweep left first; include the rear only on the initial scan.
+                # Sweep left first; include the rear at startup and after a
+                # chassis heading reset changes which wall is behind us.
                 directions = ((3, -90), (2, -180), (1, 90)) if scan_rear else ((3, -90), (1, 90))
                 for relative, yaw in directions:
                     direction = (start_heading + relative) % 4
                     ranges[direction] = self.sample(yaw, self.aim(yaw, direct=(yaw == 90)))
                     self.scan_headings[direction] = start_heading
-                # Recenter once after the sweep and use this fresh front reading
-                # as the scan result, instead of sampling the front twice.
-                self.recenter_gimbal()
-                ranges[start_heading] = self.sample(0, self.aim(0))
+                # Return with the same position action used for the side sweep.
+                # recenter() can remain pending after the gimbal reaches zero.
+                ranges[start_heading] = self.sample(0, self.aim(0, direct=True))
                 self.scan_headings[start_heading] = start_heading
             if mode == 'chassis':
                 self.sample(0, self.aim(0))
@@ -337,6 +326,7 @@ class HardwareBackend:
             state = self.hub.get_latest_state()
             completed = True
             self.initial_scan_completed = True
+            self.force_full_scan = False
             return ranges, self.heading, state.yaw
         finally:
             self.controller.front_ready = False
@@ -405,6 +395,32 @@ class HardwareBackend:
             raise RuntimeError('Cell motion failed: {}'.format(result['reason']))
         after = self.prepare_stationary_scan()
         return (after.pos_x - before.pos_x, after.pos_y - before.pos_y), after.yaw
+
+    def face_zero(self, tolerance_deg):
+        """Point the chassis along the initial grid axis and verify fresh yaw."""
+        self.ensure_running()
+        target = wrap(self.controller.target_heading_deg)
+        if abs(target) > 0.01:
+            command = wrap(-target) / setting('robot.yaw_command_sign')
+            state = self.controller.turn_to_relative(command, tolerance_deg=tolerance_deg)
+        else:
+            try:
+                state = self.controller.align_turn_heading(0.0, tolerance_deg=tolerance_deg)
+            finally:
+                self.controller.stop_chassis()
+        # Heading correction uses drive_speed, which re-enters speed mode even
+        # for a zero command. Restore an acknowledged wheel stop before scanning.
+        state = self.prepare_stationary_scan()
+        error = wrap(state.yaw)
+        if abs(error) > tolerance_deg:
+            raise RuntimeError('Chassis zero alignment outside tolerance: {:.1f} deg'.format(error))
+        # A heading reset changes which wall is behind the robot. The next
+        # scan must measure all four directions before SLAM can plan a route.
+        self.force_full_scan = (getattr(self, 'force_full_scan', False)
+                                or self.heading != 0)
+        self.heading = 0
+        self.controller.target_heading_deg = 0.0
+        return state.yaw
 
     def stop(self):
         self.controller.front_ready = False

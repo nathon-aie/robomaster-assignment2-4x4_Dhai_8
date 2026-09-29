@@ -47,6 +47,7 @@ class WallInspectionTest(unittest.TestCase):
         explorer = SimpleNamespace(
             backend=backend,
             slam=SimpleNamespace(cell=(0, 0), pose=(0, 0),
+                                 events=[],
                                  offset=lambda heading, direction: (0, 0)),
         )
         original_setting = mission.setting
@@ -60,6 +61,11 @@ class WallInspectionTest(unittest.TestCase):
             backend.scan()
 
         self.assertEqual(inspected, {1, 3})
+        yaws = {call.kwargs["yaw"] for call in backend.robot.gimbal.moveto.call_args_list}
+        self.assertTrue({72.0, 90.0, 108.0, -72.0, -90.0, -108.0} <= yaws)
+        summaries = [event for event in explorer.slam.events
+                     if event["type"] == "sign_inspection"]
+        self.assertEqual({event["direction"] for event in summaries}, {"E", "W"})
 
 
 if __name__ == "__main__":

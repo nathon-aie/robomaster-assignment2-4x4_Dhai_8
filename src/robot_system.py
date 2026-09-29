@@ -7,10 +7,10 @@ Thread 2 (Robot Motion Controller), and Telemetry Logging.
 
 try:
     from .settings import get as setting, project_path
-    from .sdk_connection import initialize_robot, load_robot_sdk
+    from .sdk_connection import cancel_chassis_speed_timer, initialize_robot, load_robot_sdk
 except ImportError:
     from settings import get as setting, project_path
-    from sdk_connection import initialize_robot, load_robot_sdk
+    from sdk_connection import cancel_chassis_speed_timer, initialize_robot, load_robot_sdk
 
 import time
 from typing import Optional
@@ -126,6 +126,10 @@ class RobotSystem:
             if worker is not None and worker.is_alive():
                 worker.join(timeout=setting("gimbal.action_timeout_sec") + 1)
         if self.robot is not None:
+            try:
+                cancel_chassis_speed_timer(self.robot.chassis)
+            except Exception as exc:
+                print("[RobotSystem] Chassis timer cleanup warning: {}".format(exc))
             try:
                 self.robot.close()
                 print("[RobotSystem] RoboMaster SDK connection closed.")

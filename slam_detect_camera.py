@@ -28,8 +28,8 @@ MAX_STATIONARY_SPEED_MPS = 0.03
 SIGN_CONFIRMATION_FRAMES = 3
 MAX_TOF_MARK_SAMPLES = 15
 SIGN_LOOK_DOWN_PITCH_DEG = -20.0
-SIGN_INSPECTION_TIMEOUT_SEC = 1.8
-SIGN_CAMERA_SWEEP_OFFSETS_DEG = (0.0,)
+SIGN_INSPECTION_TIMEOUT_SEC = 5.4
+SIGN_CAMERA_SWEEP_OFFSETS_DEG = (0.0, -18.0, 18.0)
 FRONT_STOP_TARGET_MM = 220.0
 
 
@@ -132,7 +132,16 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
         for direction, sensor_heading, distance_mm in walls:
             relative_direction = (direction - heading) % 4
             camera_yaw = yaw_for_relative_direction[relative_direction]
+            sweep_yaws = []
             finished.clear()
+            with lock:
+                inspection.update({
+                    "active": False,
+                    "cell": tuple(explorer.slam.cell),
+                    "direction": direction,
+                    "frame_count": 0,
+                    "detected_frames": 0,
+                })
             try:
                 # 1. หมุนแนวนอน (Yaw) ไปที่กำแพงด้านนั้นก่อนในระดับสายตาปกติ
                 turn_action = robot.gimbal.moveto(
@@ -169,6 +178,7 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
                         "direction": direction,
                         "tof_distance_mm": distance_mm,
                         "frame_count": 0,
+                        "detected_frames": 0,
                     })
 
                 sweep_yaws = [
@@ -220,6 +230,17 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
             finally:
                 with lock:
                     inspection["active"] = False
+                    inspected_frames = inspection.get("frame_count", 0)
+                    detected_frames = inspection.get("detected_frames", 0)
+                if hasattr(explorer.slam, "events"):
+                    explorer.slam.events.append({
+                        "timestamp": time.time(), "type": "sign_inspection",
+                        "cell": list(explorer.slam.cell),
+                        "direction": NAMES[direction],
+                        "camera_yaws": sweep_yaws,
+                        "frames": inspected_frames,
+                        "detected_frames": detected_frames,
+                    })
                 # ตรวจด้านนี้เสร็จแล้ว ให้เงยหน้าขึ้นมาก่อน (Pitch up to level)
                 try:
                     pitch_up_action = robot.gimbal.moveto(
@@ -580,6 +601,8 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                     with inspection_lock:
                         if inspection.get("active"):
                             inspection["frame_count"] += 1
+                            if detections:
+                                inspection["detected_frames"] = inspection.get("detected_frames", 0) + 1
 
                 gate_text = (
                     "WALL VERIFIED - LOOKING DOWN: sign {}/{} frames | marked {}"
