@@ -24,7 +24,7 @@ sensors:
 
 navigation:
   grid_size_m: 0.60
-  base_speed_mps: 0.35
+  base_speed_mps: 0.40
   step_test_speed_mps: 0.22
   control_rate_hz: 20
   max_heading_error_deg: 15
@@ -47,13 +47,13 @@ navigation:
   align_duration_sec: 0.3
   align_default_duration_sec: 0.4
   step_pause_sec: 1.0
-  turn_speed_dps: 60
+  turn_speed_dps: 90
   turn_settle_sec: 0.30
   duration_sec: 0
 
 pid:
-  lateral: {kp: 0.0010, ki: 0.0001, kd: 0.0010, max_speed: 0.05, integral_limit: 30}
-  yaw: {kp: 1.8, ki: 0.05, kd: 0.15, max_speed: 50, integral_limit: 20}
+  lateral: {kp: 0.0030, ki: 0.0001, kd: 0.0010, max_speed: 0.05, integral_limit: 30}
+  yaw: {kp: 3.0, ki: 0.0, kd: 0.0, max_speed: 90, integral_limit: 20}
 
 telemetry:
   buffer_capacity: 30000
