@@ -307,43 +307,38 @@ class FrontierExplorer:
                 if len(self.slam.map.visited) >= setting('slam.max_cells'):
                     self.status = 'limit_reached'
                     break
-                # Walk each step of the planned route.
-                route_blocked = False
-                for i in range(1, len(route)):
-                    target = route[i]
-                    direction = next(d for d in range(4) if neighbor(route[i - 1], d) == target)
-                    if self.moves >= setting('slam.max_moves'):
-                        self.status = 'limit_reached'
-                        break
-                    if not self.slam.contains(target):
-                        raise RuntimeError('Refusing motion outside configured map bounds')
-                    self.slam.events.append({'timestamp': time.time(), 'type': 'motion_start',
-                        'step': self.moves + 1, 'from': list(route[i - 1]), 'to': list(target),
-                        'direction': direction, 'backtrack': target in self.slam.map.visited})
-                    try:
-                        displacement, yaw = self.backend.move(direction)
-                    except BlockedCellError as exc:
-                        edge = self.slam.map.edge(route[i - 1], direction)
-                        self.slam.map.edges[edge] = True
-                        self.slam.events.append({
-                            'timestamp': time.time(), 'type': 'front_obstacle',
-                            'cell': list(route[i - 1]), 'direction': NAMES[direction],
-                            'distance_mm': exc.distance_mm,
-                            'stop_distance_mm': exc.stop_distance_mm,
-                            'action': 'edge_closed_and_replan',
-                        })
-                        route_blocked = True
-                        break
-                    self.slam.events.append({'timestamp': time.time(), 'type': 'move',
-                        'from': list(route[i - 1]), 'to': list(target), 'direction': direction,
-                        'backtrack': target in self.slam.map.visited,
-                        'odometry_delta_m': list(displacement), 'yaw': yaw})
-                    self.slam.predict(target, displacement, yaw)
-                    self.moves += 1
-                if self.status == 'limit_reached':
+                if self.moves >= setting('slam.max_moves'):
+                    self.status = 'limit_reached'
                     break
-                if route_blocked:
+                target = route[1]
+                direction = next(d for d in range(4) if neighbor(cell, d) == target)
+                backtrack = target in self.slam.map.visited
+                if not self.slam.contains(target):
+                    raise RuntimeError('Refusing motion outside configured map bounds')
+                self.slam.events.append({'timestamp': time.time(), 'type': 'frontier_plan',
+                                         'frontier': list(route[-1]),
+                                         'route': [list(step) for step in route]})
+                self.slam.events.append({'timestamp': time.time(), 'type': 'motion_start',
+                    'step': self.moves + 1, 'from': list(cell), 'to': list(target),
+                    'direction': direction, 'backtrack': backtrack})
+                try:
+                    displacement, yaw = self.backend.move(direction)
+                except BlockedCellError as exc:
+                    edge = self.slam.map.edge(cell, direction)
+                    self.slam.map.edges[edge] = True
+                    self.slam.events.append({
+                        'timestamp': time.time(), 'type': 'front_obstacle',
+                        'cell': list(cell), 'direction': NAMES[direction],
+                        'distance_mm': exc.distance_mm,
+                        'stop_distance_mm': exc.stop_distance_mm,
+                        'action': 'edge_closed_and_replan',
+                    })
                     continue
+                self.slam.events.append({'timestamp': time.time(), 'type': 'move',
+                    'from': list(cell), 'to': list(target), 'direction': direction,
+                    'backtrack': backtrack, 'odometry_delta_m': list(displacement), 'yaw': yaw})
+                self.slam.predict(target, displacement, yaw)
+                self.moves += 1
         except KeyboardInterrupt:
             self.status = 'interrupted'
         except Exception as exc:

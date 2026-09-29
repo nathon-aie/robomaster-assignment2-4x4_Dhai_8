@@ -202,7 +202,7 @@ def test_gimbal(control=None):
 
 
 def run_exploration(on_map_ready=None, control=None):
-    from src.grid_slam import DFSExplorer
+    from src.grid_slam import FrontierExplorer
     from src.slam_hardware import HardwareBackend
     system = RobotSystem()
     explorer = None
@@ -220,7 +220,7 @@ def run_exploration(on_map_ready=None, control=None):
         system.setup_threads()
         system.thread_1_sensor.start_collecting()
         system.thread_2_controller.enable_motion()
-        explorer = DFSExplorer(HardwareBackend(system), map_file)
+        explorer = FrontierExplorer(HardwareBackend(system), map_file)
         deadline = time.monotonic() + setting("slam.sensor_timeout_sec")
         while system.sensor_hub.get_latest_state().frame_index == 0:
             if time.monotonic() > deadline:

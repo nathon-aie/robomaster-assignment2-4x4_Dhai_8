@@ -35,7 +35,7 @@ def action_steps(data):
             elif kind == 'tof_sample':
                 actions.append('ToF {:+g} deg: {:.0f} mm'.format(e['gimbal_yaw'], e['range_m'] * 1000))
             elif kind == 'move':
-                actions.append('ARRIVED {} -> {}{}'.format(tuple(e['from']), tuple(e['to']), ' BACKTRACK' if e['backtrack'] else ''))
+                actions.append('ARRIVED {} -> {}{}'.format(tuple(e['from']), tuple(e['to']), ' VIA VISITED CELL' if e['backtrack'] else ''))
             elif kind == 'chassis_turn':
                 degrees = e['degrees']
                 actions.append('TURN {} {} deg'.format('right' if degrees < 0 else 'around' if abs(degrees) == 180 else 'left', abs(degrees)))
@@ -84,7 +84,7 @@ def save_actions_html(data, output):
             if step['distance_m'] is not None:
                 operation += ' · เดินจริง {:.1f} ซม.'.format(step['distance_m'] * 100)
             operation += ' → หยุด → สแกนรอบตัว' if step['completed'] else ' · ยังไม่ยืนยันถึงช่อง'
-            badge = 'ย้อนกลับ' if step['backtrack'] else 'สำรวจทางใหม่'
+            badge = 'ผ่านช่องเดิม' if step['backtrack'] else 'สำรวจทางใหม่'
         status = 'ถึงช่องแล้ว' if step['completed'] and step['step'] else 'เริ่มสำรวจ' if step['step'] == 0 else 'ไม่สำเร็จ'
         notes = '<span class="warning">มีข้อสังเกต {} รายการ</span>'.format(step['warnings']) if step['warnings'] else ''
         cards.append('<article class="step"><div class="heading"><span class="number">{}</span>'
@@ -201,7 +201,7 @@ def save_report(map_file):
 
     axis.plot([point[0] for point in planned_xy], [point[1] for point in planned_xy],
               '--o', color='#087cf5', markersize=3, linewidth=1.7,
-              label='Planned DFS route (cell centres)', zorder=5)
+              label='Exploration route (cell centres)', zorder=5)
     if actual_xy:
         axis.plot([point[0] for point in actual_xy], [point[1] for point in actual_xy],
                   color='#ff4048', linewidth=1.5, label='Actual odometry', zorder=6)
@@ -214,7 +214,7 @@ def save_report(map_file):
     axis.scatter(end_cell[1] * size, end_cell[0] * size, marker='x',
                  color='#087cf5', s=90, linewidth=2, label='Final grid cell', zorder=8)
 
-    # Sparse arrows and step numbers keep long DFS routes legible.
+    # Sparse arrows and step numbers keep long exploration routes legible.
     label_stride = max(1, math.ceil(len(moves) / 12))
     for step, (before, after) in enumerate(zip(planned_xy, planned_xy[1:]), 1):
         if step != 1 and step % label_stride and step != len(moves):
