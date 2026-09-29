@@ -148,83 +148,108 @@ def save_report(map_file):
     data = json.loads(path.read_text(encoding='utf-8'))
     telemetry_file = path.with_name((path.stem[:-4] if path.stem.endswith('_map') else path.stem) + '.json')
     duration_label = 'Elapsed: unavailable'
+    duration = None
+    records = []
     if telemetry_file.is_file():
-        duration = json.loads(telemetry_file.read_text(encoding='utf-8')).get('duration_sec')
+        telemetry = json.loads(telemetry_file.read_text(encoding='utf-8'))
+        records = telemetry.get('records', [])
+        duration = telemetry.get('duration_sec')
         if isinstance(duration, (int, float)) and math.isfinite(duration) and duration >= 0:
             minutes, seconds = divmod(round(duration), 60)
             duration_label = 'Elapsed: {:.2f} min ({} min {:02d} s)'.format(duration / 60, minutes, seconds)
     size = data['cell_size_m']
-    steps = action_steps(data)
+    start_cell = data.get('start_cell', [0, 0])
+    end_cell = data.get('cell', start_cell)
+    moves = [event for event in data['events'] if event['type'] == 'move']
+    planned_cells = [start_cell] + [event['to'] for event in moves]
+    planned_xy = [(column * size, row * size) for row, column in planned_cells]
+    start_pose = data.get('start_pose', [start_cell[0] * size, start_cell[1] * size, 0])
+    actual_xy = []
+    for record in records:
+        pos_x, pos_y = record.get('pos_x'), record.get('pos_y')
+        if (isinstance(pos_x, (int, float)) and isinstance(pos_y, (int, float))
+                and math.isfinite(pos_x) and math.isfinite(pos_y)):
+            # Telemetry is zeroed at startup; map poses include the start-cell offset.
+            actual_xy.append((start_pose[1] + pos_y, start_pose[0] + pos_x))
+    finish = next((event for event in reversed(data['events']) if event['type'] == 'finish'), None)
+    last_recorded_at = records[-1].get('timestamp') if records else None
+    actual_incomplete = (finish is not None and isinstance(last_recorded_at, (int, float))
+                         and finish['timestamp'] - last_recorded_at > 1.0)
+    if actual_incomplete and isinstance(duration, (int, float)):
+        full_duration = duration + finish['timestamp'] - last_recorded_at
+        minutes, seconds = divmod(round(full_duration), 60)
+        duration_label = 'Elapsed: {:.2f} min ({} min {:02d} s)'.format(
+            full_duration / 60, minutes, seconds)
+
     figure, axis = plt.subplots(figsize=(9, 9))
     for row, column in data['visited']:
+        fill = '#e5f4e8' if [row, column] == start_cell else (
+            '#fbe9eb' if [row, column] == end_cell else '#f5f8fa')
         axis.add_patch(plt.Rectangle(((column - 0.5) * size, (row - 0.5) * size), size, size,
-                                     facecolor='#e4f1f8', edgecolor='#b6c5d0', linewidth=0.5))
+                                     facecolor=fill, edgecolor='#d6dee3', linewidth=0.5))
     for edge in data['edges']:
         if not edge['wall']:
             continue
         (row1, column1), (row2, column2) = edge['cells']
         row, column = (row1 + row2) * size / 2, (column1 + column2) * size / 2
         if row1 != row2:
-            axis.plot([column - size / 2, column + size / 2], [row, row], color='#263747', linewidth=3)
+            axis.plot([column - size / 2, column + size / 2], [row, row],
+                      color='#20252b', linewidth=3, zorder=4)
         else:
-            axis.plot([column, column], [row - size / 2, row + size / 2], color='#263747', linewidth=3)
-    trajectory = data['trajectory']
-    if trajectory:
-        axis.plot([p['pose'][1] for p in trajectory], [p['pose'][0] for p in trajectory],
-                  'o-', color='#1689c1', markersize=3, linewidth=1, label='Estimated trajectory')
-    start = data.get('start_pose', [0, 0, 0])
-    axis.scatter([start[1]], [start[0]], marker='s', color='#26a269', s=90,
-                 label='Start (row, column) {}'.format(tuple(data.get('start_cell', [0, 0]))), zorder=5)
-    axis.scatter([data['pose'][1]], [data['pose'][0]], marker='x', color='#e33b35', s=90,
-                 label='Last estimated pose', zorder=6)
+            axis.plot([column, column], [row - size / 2, row + size / 2],
+                      color='#20252b', linewidth=3, zorder=4)
+
+    axis.plot([point[0] for point in planned_xy], [point[1] for point in planned_xy],
+              '--o', color='#087cf5', markersize=3, linewidth=1.7,
+              label='Planned DFS route (cell centres)', zorder=5)
+    if actual_xy:
+        axis.plot([point[0] for point in actual_xy], [point[1] for point in actual_xy],
+                  color='#ff4048', linewidth=1.5, label='Actual odometry', zorder=6)
+        axis.scatter(*actual_xy[-1], marker='*', color='#e02e39', edgecolor='#20252b',
+                     s=120, label='Last recorded odometry' if actual_incomplete else 'Actual end',
+                     zorder=9)
+    axis.scatter(start_cell[1] * size, start_cell[0] * size, marker='o',
+                 facecolor='#30b45a', edgecolor='#174d2b', s=100,
+                 label='Start {}'.format(tuple(start_cell)), zorder=10)
+    axis.scatter(end_cell[1] * size, end_cell[0] * size, marker='x',
+                 color='#087cf5', s=90, linewidth=2, label='Final grid cell', zorder=8)
+
+    # Sparse arrows and step numbers keep long DFS routes legible.
+    label_stride = max(1, math.ceil(len(moves) / 12))
+    for step, (before, after) in enumerate(zip(planned_xy, planned_xy[1:]), 1):
+        if step != 1 and step % label_stride and step != len(moves):
+            continue
+        dx, dy = after[0] - before[0], after[1] - before[1]
+        axis.annotate('', xy=(before[0] + 0.76 * dx, before[1] + 0.76 * dy),
+                      xytext=(before[0] + 0.42 * dx, before[1] + 0.42 * dy),
+                      arrowprops=dict(arrowstyle='-|>', color='#344054', lw=1.4),
+                      zorder=7)
+        axis.annotate(str(step), xy=after, xytext=(5, 5), textcoords='offset points',
+                      fontsize=8, color='#075cad', zorder=8,
+                      bbox=dict(boxstyle='round,pad=0.12', facecolor='white',
+                                edgecolor='none', alpha=0.85))
+
     if 'map_info' in data:
         axis.set_xlim(-size / 2, (data['map_info']['columns'] - 0.5) * size)
         axis.set_ylim(-size / 2, (data['map_info']['rows'] - 0.5) * size)
-        # Plot grid lines at cell boundaries, matching wall coordinates.
-        axis.set_xticks([(i - 0.5) * size for i in range(data['map_info']['columns'] + 1)])
-        axis.set_yticks([(i - 0.5) * size for i in range(data['map_info']['rows'] + 1)])
-        # Major ticks keep the boundary grid; minor ticks label cell indices.
-        axis.set_xticklabels([])
-        axis.set_yticklabels([])
-        axis.set_xticks([column * size for column in range(data['map_info']['columns'])], minor=True)
-        axis.set_yticks([row * size for row in range(data['map_info']['rows'])], minor=True)
-        axis.set_xticklabels([str(column) for column in range(data['map_info']['columns'])], minor=True)
-        axis.set_yticklabels([str(row) for row in range(data['map_info']['rows'])], minor=True)
+        axis.set_xticks([column * size for column in range(data['map_info']['columns'])])
+        axis.set_yticks([row * size for row in range(data['map_info']['rows'])])
+        axis.set_xticklabels(['Col {}'.format(column) for column in range(data['map_info']['columns'])])
+        axis.set_yticklabels(['Row {}'.format(row) for row in range(data['map_info']['rows'])])
+        axis.set_xticks([(i - 0.5) * size for i in range(data['map_info']['columns'] + 1)], minor=True)
+        axis.set_yticks([(i - 0.5) * size for i in range(data['map_info']['rows'] + 1)], minor=True)
         axis.tick_params(which='minor', length=0)
         axis.set_axisbelow(True)
-    # Cell coordinates are indices (row, column), separate from metre axes.
-    if 'map_info' in data:
-        cells = ((row, column) for row in range(data['map_info']['rows'])
-                 for column in range(data['map_info']['columns']))
-    else:
-        cells = (tuple(cell) for cell in data['visited'])
-    for row, column in cells:
-        axis.text((column - 0.40) * size, (row - 0.40) * size, '({},{})'.format(row, column),
-                  ha='left', va='bottom', fontsize=10, color='#4b5563', zorder=9,
-                  bbox=dict(boxstyle='round,pad=0.15', facecolor='white',
-                            edgecolor='none', alpha=0.85))
-    labels = {}
-    for step in steps:
-        if not step['completed']:
-            continue
-        labels.setdefault(tuple(step['to']), []).append(str(step['step']))
-    for (row, column), numbers in labels.items():
-        # One clear badge per step, stacked within its cell. Offset from the
-        # estimated route and start/end markers rather than printing over them.
-        spacing = min(0.19, 0.6 / max(1, len(numbers))) * size
-        for index, number in enumerate(numbers):
-            vertical = ((len(numbers) - 1) / 2 - index) * spacing
-            axis.text((column + 0.18) * size, row * size + vertical, number,
-                      ha='center', va='center', fontsize=13, color='#124c72', weight='bold',
-                      zorder=10, bbox=dict(boxstyle='round,pad=0.22', facecolor='white',
-                                          edgecolor='#87b4d0', linewidth=1))
     axis.set_aspect('equal')
-    axis.set_xlabel('Column - increases right')
-    axis.set_ylabel('Row - increases upward')
-    axis.set_title('Explored map | {} | {} cells\n{}\nCell coordinates = (row, column) | Numbered badges = movement steps (top to bottom)'.format(
+    axis.set_xlabel('Column (increases right)')
+    axis.set_ylabel('Row (increases upward)')
+    axis.set_title('RoboMaster EP: trajectory overlay | {} | {} cells\n{}'.format(
         data['status'], len(data['visited']), duration_label))
-    axis.legend(loc='upper center', bbox_to_anchor=(0.5, -0.13), ncol=3, fontsize=9)
-    axis.grid(which='major', color='#b6c5d0', linewidth=0.7, alpha=0.65)
+    axis.legend(loc='upper right', fontsize=8, framealpha=0.95)
+    axis.grid(which='minor', color='#c7d0d8', linewidth=0.7, alpha=0.7)
+    if actual_incomplete:
+        axis.text(0.5, -0.09, 'Odometry trace ends before the exploration finishes (telemetry buffer full).',
+                  transform=axis.transAxes, ha='center', fontsize=9, color='#9a3412')
 
     figure.tight_layout()
     actions = save_actions_html(data, path.parent / 'actions.html')

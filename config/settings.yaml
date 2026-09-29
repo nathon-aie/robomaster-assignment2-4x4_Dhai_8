@@ -56,7 +56,7 @@ pid:
   yaw: {kp: 1.8, ki: 0.05, kd: 0.15, max_speed: 35, integral_limit: 20}
 
 telemetry:
-  buffer_capacity: 10000
+  buffer_capacity: 30000
 
 system:
   sensor_warmup_sec: 0.3

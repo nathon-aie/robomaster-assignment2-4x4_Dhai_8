@@ -1,34 +1,34 @@
 {
   "schema": 1,
-  "source_csv": "/home/nathon/My_Projects/SLAM/data/calibration_measurements.csv",
+  "source_csv": "/home/nathon/My_Projects/241-251 Robot/Final_Assignment/data/calibration_measurements.csv",
   "sensors": {
     "sharp_left": {
       "degree": 2,
       "coefficients": [
-        0.0015634123543582755,
-        -1.592718773829918,
-        444.18900476675213
+        0.001470470510559542,
+        -1.5140981371486804,
+        430.3442531188547
       ],
-      "rmse_mm": 11.16365293993293,
-      "r2": 0.982908276987894,
+      "rmse_mm": 10.291304925198821,
+      "r2": 0.9854750687455879,
       "samples": 6,
-      "raw_min": 115.0,
-      "raw_max": 601.0,
+      "raw_min": 105.0,
+      "raw_max": 604.0,
       "reference_min_mm": 50.0,
       "reference_max_mm": 300.0
     },
     "sharp_right": {
       "degree": 2,
       "coefficients": [
-        0.0007881440056314143,
-        -1.3216646345272038,
-        610.43776036934
+        0.0014135291959280157,
+        -1.4957127032368,
+        430.82747727081403
       ],
-      "rmse_mm": 14.487270177149558,
-      "r2": 0.9712163203859574,
+      "rmse_mm": 14.881479872294275,
+      "r2": 0.9696285563625829,
       "samples": 6,
-      "raw_min": 301.0,
-      "raw_max": 729.0,
+      "raw_min": 118.0,
+      "raw_max": 637.0,
       "reference_min_mm": 50.0,
       "reference_max_mm": 300.0
     }
