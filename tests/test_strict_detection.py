@@ -39,6 +39,8 @@ class StrictDetectionTest(unittest.TestCase):
             ("c5_3_N_Green_Circle_snap3.jpg", "Green", "Square"),
             ("c5_1_E_Yellow_Square_snap2.jpg", "Yellow", "Vertical_Rect"),
         )
+        if any(not (captures / filename).is_file() for filename, _, _ in examples):
+            self.skipTest("recorded camera frames are unavailable")
         for filename, color, shape in examples:
             with self.subTest(filename=filename):
                 frame = cv2.imread(str(captures / filename))
