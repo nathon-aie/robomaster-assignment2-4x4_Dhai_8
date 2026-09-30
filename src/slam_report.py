@@ -216,11 +216,7 @@ def save_report(map_file):
 
     axis.plot([point[0] for point in planned_xy], [point[1] for point in planned_xy],
               '--o', color='#087cf5', markersize=3, linewidth=1.7,
-<<<<<<< HEAD
-              label='Planned DFS route (cell centres)', zorder=5)
-=======
               label='Exploration route (cell centres)', zorder=5)
->>>>>>> stamp
     if actual_xy:
         axis.plot([point[0] for point in actual_xy], [point[1] for point in actual_xy],
                   color='#ff4048', linewidth=1.5, label='Actual odometry', zorder=6)
@@ -233,11 +229,7 @@ def save_report(map_file):
     axis.scatter(end_cell[1] * size, end_cell[0] * size, marker='x',
                  color='#087cf5', s=90, linewidth=2, label='Final grid cell', zorder=8)
 
-<<<<<<< HEAD
-    # Sparse arrows and step numbers keep long DFS routes legible.
-=======
     # Sparse arrows and step numbers keep long exploration routes legible.
->>>>>>> stamp
     label_stride = max(1, math.ceil(len(moves) / 12))
     for step, (before, after) in enumerate(zip(planned_xy, planned_xy[1:]), 1):
         if step != 1 and step % label_stride and step != len(moves):

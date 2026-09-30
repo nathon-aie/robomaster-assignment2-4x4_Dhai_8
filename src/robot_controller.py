@@ -314,29 +314,14 @@ class RobotControllerThread(threading.Thread):
 
             self.stop_chassis()
             time.sleep(setting("navigation.turn_settle_sec"))
-<<<<<<< HEAD
-            end_state = self.align_turn_heading(target_heading)
-            self.target_heading_deg = target_heading
-            print(f"[Controller] ✅ Turn Completed: Current Yaw = {end_state.yaw:+.1f}° (Target Grid Heading = {target_heading:.0f}°)\n")
-=======
             end_state = self.align_turn_heading(target_heading, tolerance_deg=tolerance_deg)
             self.target_heading_deg = target_heading
             print(f"[Controller] ✅ Turn Completed: Current Yaw = {end_state.yaw:+.1f}° (Target Grid Heading = {target_heading:.0f}°)\n")
             return end_state
->>>>>>> stamp
         finally:
             self.stop_chassis()
             self.wall_pid.reset()
 
-<<<<<<< HEAD
-    def align_turn_heading(self, target_heading: float):
-        """Correct a completed turn using fresh yaw until the chassis settles on target."""
-        deadline = time.monotonic() + setting("slam.heading_align_timeout_sec")
-        tolerance = setting("slam.heading_tolerance_deg")
-        # Require feedback received after entering the correction phase.
-        last_attitude_at = time.monotonic()
-        within_tolerance = 0
-=======
     def align_turn_heading(self, target_heading: float, tolerance_deg=None):
         """Correct a completed turn using fresh yaw until the chassis settles on target."""
         deadline = time.monotonic() + setting("slam.heading_align_timeout_sec")
@@ -349,7 +334,6 @@ class RobotControllerThread(threading.Thread):
         probe_error = None
         probe_started = None
         reversed_sign = False
->>>>>>> stamp
 
         while time.monotonic() < deadline and self._running.is_set():
             state = self.sensor_hub.get_latest_state()
@@ -366,17 +350,12 @@ class RobotControllerThread(threading.Thread):
             error = (target_heading - state.yaw + 180.0) % 360.0 - 180.0
             if abs(error) <= tolerance:
                 self.stop_chassis()
-<<<<<<< HEAD
-=======
                 probe_yaw = None
->>>>>>> stamp
                 within_tolerance += 1
                 if within_tolerance >= 3:
                     return state
             else:
                 within_tolerance = 0
-<<<<<<< HEAD
-=======
                 if probe_yaw is None:
                     probe_yaw, probe_error, probe_started = state.yaw, error, now
                 elif now - probe_started >= 0.20:
@@ -391,7 +370,6 @@ class RobotControllerThread(threading.Thread):
                         probe_yaw, probe_error, probe_started = state.yaw, error, now
                     elif abs(yaw_change) >= 0.5:
                         probe_yaw, probe_error, probe_started = state.yaw, error, now
->>>>>>> stamp
                 correction_speed = max(4.0, min(15.0, abs(error) * 1.8))
                 self.drive_speed(0.0, 0.0, math.copysign(correction_speed, error))
             time.sleep(0.01)
