@@ -1,4 +1,3 @@
-import argparse
 import json
 import math
 import statistics
@@ -18,12 +17,14 @@ try:
     from src.settings import project_path
     from src.target_fire import TargetFireController
     from src.slam_report import save_actions_html, save_events_csv
+    from src.slam_report import render_map_image as render_trajectory_map
 except ImportError:
     from SLAM.src.grid_slam import DIRECTIONS, NAMES, DFSExplorer, wrap
     from SLAM.src.settings import get as setting
     from SLAM.src.settings import project_path
     from SLAM.src.target_fire import TargetFireController
     from SLAM.src.slam_report import save_actions_html, save_events_csv
+    from SLAM.src.slam_report import render_map_image as render_trajectory_map
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -233,7 +234,8 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
                             if shooter is not None:
                                 with lock:
                                     confirmed_now = [dict(target) for target in inspection.get("targets", [])
-                                                     if target["confirmed"]]
+                                                     if target["confirmed"]
+                                                     and shooter.matches_target(target)]
                                     if confirmed_now:
                                         inspection["active"] = False
                                         inspection["targets"] = []
@@ -358,147 +360,8 @@ def save_mission_reports(map_file):
 
 
 def render_map_image(map_file):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Circle, Patch, Rectangle
-
-    path = Path(map_file)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    cell_size = data["cell_size_m"]
-    rows = data["map_info"]["rows"]
-    columns = data["map_info"]["columns"]
-    figure, axis = plt.subplots(figsize=(10, 8))
-
-    for cell_x, cell_y in data["visited"]:
-        axis.add_patch(Rectangle(
-            (cell_y * cell_size - cell_size / 2,
-             cell_x * cell_size - cell_size / 2),
-            cell_size, cell_size, facecolor="#e7f1f7",
-            edgecolor="#aab9c4", linewidth=0.8, zorder=0,
-        ))
-
-    for edge in data["edges"]:
-        if not edge["wall"]:
-            continue
-        (cell_a, cell_b) = edge["cells"]
-        if cell_a[0] != cell_b[0]:
-            wall_x = (cell_a[1] + cell_b[1]) * cell_size / 2
-            wall_y = (cell_a[0] + cell_b[0]) * cell_size / 2
-            axis.plot([wall_x - cell_size / 2, wall_x + cell_size / 2],
-                      [wall_y, wall_y], color="#263746", linewidth=3.2,
-                      solid_capstyle="round", zorder=2)
-        else:
-            wall_x = (cell_a[1] + cell_b[1]) * cell_size / 2
-            wall_y = (cell_a[0] + cell_b[0]) * cell_size / 2
-            axis.plot([wall_x, wall_x],
-                      [wall_y - cell_size / 2, wall_y + cell_size / 2],
-                      color="#263746", linewidth=3.2,
-                      solid_capstyle="round", zorder=2)
-
-    trajectory = data.get("trajectory", [])
-    if trajectory:
-        axis.plot(
-            [point["pose"][1] for point in trajectory],
-            [point["pose"][0] for point in trajectory],
-            "o-", color="#1486bd", markersize=3.5, linewidth=1.5,
-            label="Robot path", zorder=3,
-        )
-
-    start = data.get("start_pose", [0.0, 0.0, 0.0])
-    axis.scatter([start[1]], [start[0]], marker="s", s=105,
-                 color="#23a66f", edgecolors="white", linewidths=1,
-                 label="Start {}".format(tuple(data.get("start_cell", [0, 0]))),
-                 zorder=6)
-    axis.scatter([data["pose"][1]], [data["pose"][0]], marker="X", s=100,
-                 color="#e4473d", edgecolors="white", linewidths=0.8,
-                 label="Last estimated pose", zorder=7)
-
-    palette = {
-        "Red": "#e3423a", "Green": "#28a765",
-        "Blue": "#2776c9", "Yellow": "#e2bd00",
-    }
-    marker_labels = set()
-    for sign in data.get("signs", []):
-        cell_x, cell_y = sign["cell"]
-        direction = NAMES.index(sign["direction"])
-        color = palette.get(sign["color"], "#8b5fbf")
-        offset = cell_size * 0.34
-        center_x, center_y = cell_y * cell_size, cell_x * cell_size
-        if direction == 0:
-            center_y += offset
-            label_y = center_y + cell_size * 0.10
-            label_x = center_x
-            vertical_align = "bottom"
-        elif direction == 1:
-            center_x += offset
-            label_x = center_x + cell_size * 0.09
-            label_y = center_y
-            vertical_align = "center"
-        elif direction == 2:
-            center_y -= offset
-            label_y = center_y - cell_size * 0.10
-            label_x = center_x
-            vertical_align = "top"
-        else:
-            center_x -= offset
-            label_x = center_x - cell_size * 0.09
-            label_y = center_y
-            vertical_align = "center"
-
-        shape = sign["shape"]
-        if shape == "Circle":
-            patch = Circle((center_x, center_y), cell_size * 0.065)
-        else:
-            width = cell_size * (0.16 if shape == "Horizontal_Rect" else 0.11)
-            height = cell_size * (0.16 if shape == "Vertical_Rect" else 0.11)
-            patch = Rectangle((center_x - width / 2, center_y - height / 2),
-                              width, height)
-        patch.set_facecolor(color)
-        patch.set_edgecolor("#14212b")
-        patch.set_linewidth(1.4)
-        patch.set_zorder(8)
-        axis.add_patch(patch)
-
-        marker_labels.add((sign["color"], color))
-
-    handles, labels = axis.get_legend_handles_labels()
-    handles.insert(0, Line2D([0], [0], color="#263746", linewidth=3.2, label="Wall"))
-    labels.insert(0, "Wall")
-    for color_name, color in sorted(marker_labels):
-        handles.append(Patch(facecolor=color, edgecolor="#14212b"))
-        labels.append("{} target".format(color_name))
-    axis.legend(
-        handles,
-        labels,
-        bbox_to_anchor=(1.02, 1.0),
-        loc="upper left",
-        fontsize=8.5,
-        framealpha=0.96,
-        borderaxespad=0,
-    )
-
-    axis.set_xlim(-cell_size / 2, (columns - 0.5) * cell_size)
-    axis.set_ylim(-cell_size / 2, (rows - 0.5) * cell_size)
-    axis.set_xticks([(index - 0.5) * cell_size for index in range(columns + 1)])
-    axis.set_yticks([(index - 0.5) * cell_size for index in range(rows + 1)])
-    axis.set_aspect("equal")
-    axis.set_axisbelow(True)
-    axis.grid(color="#aab9c4", linewidth=0.7, alpha=0.7)
-    axis.set_xlabel("Initial right axis y (m)")
-    axis.set_ylabel("Initial forward axis x (m)")
-    axis.set_title(
-        "Exploration map | {} | {} / {} cells visited | {} sign marks".format(
-            data["status"], len(data["visited"]), rows * columns,
-            len(data.get("signs", [])),
-        )
-    )
-    figure.tight_layout()
-    image_path = path.with_name("map.png")
-    figure.savefig(str(image_path), dpi=180, bbox_inches="tight")
-    plt.close(figure)
-    return image_path
+    """Render the shared planned-versus-odometry map, including camera signs."""
+    return render_trajectory_map(map_file)
 
 
 def clear_previous_captures(dirs=None):
@@ -519,7 +382,8 @@ def clear_previous_captures(dirs=None):
 
 
 def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
-                    control=None, fire_type="water_fire", on_frame=None):
+                    control=None, fire_type="water_fire", on_frame=None,
+                    target_color="Red", target_shape="All"):
     outcome = {"completed": False, "error": None}
     sign_marks = {}
     confirmation_streaks = {}
@@ -540,6 +404,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
                 robot, inspection, inspection_lock, inspection_finished,
                 fire_type, explorer.slam.events,
                 pose_provider=explorer.backend.hub.get_latest_state,
+                target_color=target_color, target_shape=target_shape,
             )
             inspect_walls_during_scan(
                 explorer, inspection, inspection_lock, inspection_finished, shooter
@@ -562,7 +427,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
 
     try:
         print("Camera is live. {}".format(
-            "Use the GUI Stop button or close its camera window."
+            "Use the GUI Stop button to end the mission."
             if on_frame is not None else "Press 'q' to stop/close the mission window."))
         while True:
             if camera_is_robot:
@@ -774,7 +639,8 @@ def run_simulation(camera_index, output, control=None, on_frame=None):
 
 
 def run_hardware(conn_type, calibration_path, output, control=None,
-                 fire_type="water_fire", on_frame=None):
+                 fire_type="water_fire", on_frame=None,
+                 target_color="Red", target_shape="All"):
     try:
         from src.robot_system import RobotSystem
         from src.slam_hardware import HardwareBackend
@@ -821,7 +687,8 @@ def run_hardware(conn_type, calibration_path, output, control=None,
         stop_motion = system.thread_2_controller.stop_running
         return run_camera_loop(
             explorer, camera, camera_is_robot=True, stop_motion=stop_motion,
-            control=control, fire_type=fire_type, on_frame=on_frame
+            control=control, fire_type=fire_type, on_frame=on_frame,
+            target_color=target_color, target_shape=target_shape,
         )
     finally:
         if system.thread_2_controller is not None:
@@ -834,64 +701,3 @@ def run_hardware(conn_type, calibration_path, output, control=None,
                 camera.stop_video_stream()
         finally:
             system.shutdown(run_analysis=False)
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Explore a maze with Grid SLAM while detecting signs from the camera"
-    )
-    parser.add_argument("--mock", action="store_true",
-                        help="Run the SLAM simulator and show a PC webcam")
-    parser.add_argument("--camera-index", type=int, default=0,
-                        help="PC webcam index used with --mock")
-    parser.add_argument("--conn-type", choices=("ap", "sta"),
-                        default=setting("robot.conn_type"))
-    parser.add_argument("--fire-type", choices=("water_fire", "infared_fire", "infrared_fire"),
-                        default="water_fire", help="Blaster mode for every confirmed target")
-    parser.add_argument("--calibration", default=project_path("paths.calibration"))
-    parser.add_argument("--output-dir", default=str(PROJECT_ROOT / "mission_maps"),
-                        help="Folder for timestamped mission results (outside SLAM)")
-    parser.add_argument("--output", default=None,
-                        help="Optional explicit map JSON path; overrides --output-dir")
-    args = parser.parse_args()
-
-    calibration_path = Path(args.calibration)
-    if not calibration_path.is_absolute():
-        if (PROJECT_ROOT / calibration_path).is_file():
-            calibration_path = PROJECT_ROOT / calibration_path
-        elif (PROJECT_ROOT / "SLAM" / calibration_path).is_file():
-            calibration_path = PROJECT_ROOT / "SLAM" / calibration_path
-        else:
-            calibration_path = PROJECT_ROOT / calibration_path
-
-    if args.output:
-        output_path = Path(args.output)
-        if not output_path.is_absolute():
-            output_path = PROJECT_ROOT / output_path
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-    else:
-        output_root = Path(args.output_dir)
-        if not output_root.is_absolute():
-            output_root = PROJECT_ROOT / output_root
-        run_dir = output_root / datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
-        run_dir.mkdir(parents=True, exist_ok=False)
-        output_path = run_dir / "explored_map.json"
-    print("Mission output folder: {}".format(output_path.parent))
-
-    try:
-        if args.mock:
-            success = run_simulation(args.camera_index, output_path)
-        else:
-            success = run_hardware(args.conn_type, calibration_path, output_path,
-                                   fire_type=args.fire_type)
-        image_path = render_map_image(output_path)
-        save_mission_reports(output_path)
-        print("Map image saved to: {}".format(image_path))
-        return 0 if success else 1
-    except (OSError, RuntimeError, ValueError) as error:
-        print("Mission error: {}".format(error))
-        return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

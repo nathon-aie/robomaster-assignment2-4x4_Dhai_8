@@ -1,4 +1,3 @@
-import argparse
 import math
 import sys
 import time
@@ -547,53 +546,20 @@ def clear_previous_captures(capture_dir=None):
     return deleted_count
 
 
-def main(on_frame=None, cancel=None):
-    parser = argparse.ArgumentParser(description="Adaptive RoboMaster Sign Detector")
-    parser.add_argument("--conn-type", choices=("ap", "sta"), default="ap",
-                        help="RoboMaster connection type (default: ap)")
-    parser.add_argument("--webcam", action="store_true",
-                        help="Use PC webcam instead of RoboMaster camera")
-    parser.add_argument("--camera-index", type=int, default=0,
-                        help="Webcam device index when using --webcam")
-    parser.add_argument("--image", type=str, default=None,
-                        help="Path to a single test image")
-    parser.add_argument("--debug", action="store_true",
-                        help="Show debug candidate masks and logs")
-    args = parser.parse_args()
-
-    # Mode 1: Test on a static image
-    if args.image is not None:
-        path = Path(args.image)
-        if not path.is_file():
-            print("Error: Image not found: {}".format(args.image))
-            return
-        frame = cv2.imread(str(path))
-        result, mask_view, detections = detect_signs(frame, debug=args.debug)
-        print("Detected {} sign(s):".format(len(detections)))
-        for d in detections:
-            print(" - {} {} at box={} (conf: {:.2f})".format(
-                d["color"], d["shape"], d["box"], d.get("confidence", 0.0)
-            ))
-        combined = build_side_by_side_view(result, mask_view)
-        cv2.imshow("RoboMaster - Camera & Sign Mask", combined)
-        print("Press any key to exit.")
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-        return
-
+def main(on_frame=None, cancel=None, webcam=False, conn_type="ap", camera_index=0):
     snapshot_tracker = {}
     capture_dir = Path("telemetry_logs/camera_test/captured_signs")
     capture_dir.mkdir(parents=True, exist_ok=True)
     clear_previous_captures(capture_dir)
 
-    # Mode 2: Test on PC webcam
-    if args.webcam:
-        cap = cv2.VideoCapture(args.camera_index)
+    # Test on PC webcam
+    if webcam:
+        cap = cv2.VideoCapture(camera_index)
         if not cap.isOpened():
-            print("Error: Could not open webcam index {}".format(args.camera_index))
+            print("Error: Could not open webcam index {}".format(camera_index))
             return
         print("Webcam detection started on index {}. {}".format(
-            args.camera_index,
+            camera_index,
             "Use the GUI Stop button to quit." if on_frame is not None else "Press 'q' to quit."))
         print("Auto-snapshot: Will save 3 confirmation photos into '{}' when target is detected.".format(capture_dir))
         try:
@@ -601,7 +567,7 @@ def main(on_frame=None, cancel=None):
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     continue
-                result, mask_view, detections = detect_signs(frame, debug=args.debug)
+                result, mask_view, detections = detect_signs(frame)
 
                 # Capture up to 3 confirmation photos per detected target
                 for d in detections:
@@ -627,12 +593,12 @@ def main(on_frame=None, cancel=None):
                 cv2.destroyAllWindows()
         return
 
-    # Mode 3: RoboMaster Robot Camera
+    # RoboMaster Robot Camera
     try:
         from robomaster import robot
     except ImportError as error:
         print("RoboMaster SDK unavailable: {}".format(error))
-        print("Tip: Use --webcam to test with your PC webcam.")
+        print("Tip: Select the PC webcam in the GUI to test without the robot.")
         return
 
     ep_robot = robot.Robot()
@@ -640,8 +606,8 @@ def main(on_frame=None, cancel=None):
     stream_started = False
 
     try:
-        print("Connecting to robot camera via {}...".format(args.conn_type))
-        ep_robot.initialize(conn_type=args.conn_type)
+        print("Connecting to robot camera via {}...".format(conn_type))
+        ep_robot.initialize(conn_type=conn_type)
         ep_camera = ep_robot.camera
         ep_camera.start_video_stream(display=False)
         stream_started = True
@@ -653,7 +619,7 @@ def main(on_frame=None, cancel=None):
         while cancel is None or not cancel.is_set():
             frame = ep_camera.read_cv2_image(strategy="newest", timeout=0.5)
             if frame is not None:
-                result, mask_view, detections = detect_signs(frame, debug=args.debug)
+                result, mask_view, detections = detect_signs(frame)
                 signs = tuple(sorted(
                     "{} {}".format(item["color"], item["shape"])
                     for item in detections
@@ -696,7 +662,3 @@ def main(on_frame=None, cancel=None):
             ep_camera.stop_video_stream()
         ep_robot.close()
         print("Camera disconnected.")
-
-
-if __name__ == "__main__":
-    main()

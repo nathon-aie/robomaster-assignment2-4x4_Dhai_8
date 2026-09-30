@@ -44,11 +44,13 @@ def get_next_run_number(base_dir: Path, prefix: str = "run") -> int:
 def write_telemetry_csv(records, csv_path):
     """Write sensor records in the same column order as their JSON snapshots."""
     path = Path(csv_path)
-    with path.open('w', newline='', encoding='utf-8') as stream:
+    temp = path.with_suffix(path.suffix + '.tmp')
+    with temp.open('w', newline='', encoding='utf-8') as stream:
         if records:
             writer = csv.DictWriter(stream, fieldnames=list(records[0]))
             writer.writeheader()
             writer.writerows(records)
+    temp.replace(path)
     return path
 
 
@@ -82,6 +84,9 @@ class TelemetryRecorder:
         self.run_dir = self.base_dir / self.run_name
         self.output_dir = self.run_dir  # For backward compatibility
         self._session_id = f"{self.run_name}_{self.timestamp_str}"
+        self.journal_path = self.run_dir / 'telemetry.jsonl'
+        self._journal = None
+        self._last_journal_sync = time.monotonic()
 
     def record_snapshot(self, snapshot: Any):
         """Thread-safe push of sensor snapshot."""
@@ -90,6 +95,14 @@ class TelemetryRecorder:
         with self._lock:
             if len(self._records) < self.buffer_capacity:
                 self._records.append(data)
+            if self._journal is None:
+                self.run_dir.mkdir(parents=True, exist_ok=True)
+                self._journal = self.journal_path.open('a', encoding='utf-8', buffering=1)
+            self._journal.write(json.dumps(data, ensure_ascii=False) + '\n')
+            if time.monotonic() - self._last_journal_sync >= 1.0:
+                self._journal.flush()
+                os.fsync(self._journal.fileno())
+                self._last_journal_sync = time.monotonic()
 
     def get_records(self) -> List[Dict[str, Any]]:
         with self._lock:
@@ -99,6 +112,15 @@ class TelemetryRecorder:
         """Save sensor records as JSON and CSV inside the run directory."""
         with self._lock:
             records = list(self._records)
+            if self._journal is not None:
+                self._journal.flush()
+                os.fsync(self._journal.fileno())
+                self._journal.close()
+                self._journal = None
+
+        if self.journal_path.exists():
+            with self.journal_path.open(encoding='utf-8') as stream:
+                records = [json.loads(line) for line in stream if line.strip()]
 
         self.run_dir.mkdir(parents=True, exist_ok=True)
         base_filename = custom_name if custom_name else self.run_name
@@ -114,8 +136,10 @@ class TelemetryRecorder:
             "duration_sec": records[-1]["elapsed_sec"] if records else 0.0,
             "records": records,
         }
-        with json_path.open("w", encoding="utf-8") as f:
+        temp = json_path.with_suffix(json_path.suffix + '.tmp')
+        with temp.open("w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False)
+        temp.replace(json_path)
 
         csv_path = write_telemetry_csv(records, self.run_dir / f"{name}.csv")
         print(f"[TelemetryRecorder] Saved {len(records)} samples -> {json_path} & {csv_path}")

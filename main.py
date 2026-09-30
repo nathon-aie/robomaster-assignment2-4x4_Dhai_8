@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """RoboMaster EP operations selected exclusively through the main menu."""
 import json
+import signal
 import sys
 import time
 from datetime import datetime
@@ -10,7 +11,8 @@ from typing import List
 from src.settings import get as setting, project_path
 from src.robot_system import RobotSystem
 from src.telemetry import TelemetryAnalyzer
-from src.operation_menu import OperationGUI, calibration_action, select_operation
+from src.operation_menu import OperationGUI
+from src.run_log import capture_console
 
 
 def parse_custom_commands(cmd_input: str) -> List[str]:
@@ -145,21 +147,10 @@ def calibrate_sensors(action, reference_provider=None, control=None):
         return 0
     session = CalibrationSession(setting('robot.conn_type'))
     try:
-        if reference_provider or control:
-            session.collect(action, project_path('paths.measurements'), None, None,
-                            setting('sensors.tof_index'), setting('calibration.samples'),
-                            reference_provider=reference_provider)
-            return 1 if control and control.cancel.is_set() else 0
-        while action is not None:
-            try:
-                session.collect(action, project_path('paths.measurements'), None, None,
-                                setting('sensors.tof_index'), setting('calibration.samples'))
-            except (OSError, RuntimeError, ValueError) as exc:
-                print('[calibration] {}'.format(exc), file=sys.stderr)
-                status = 1
-            action = calibration_action()
-    except (EOFError, KeyboardInterrupt):
-        print('\n[calibration] ออกจากเมนู Calibration')
+        session.collect(action, project_path('paths.measurements'), None, None,
+                        setting('sensors.tof_index'), setting('calibration.samples'),
+                        reference_provider=reference_provider)
+        return 1 if control and control.cancel.is_set() else 0
     finally:
         session.close()
 
@@ -216,54 +207,66 @@ def test_gimbal(control=None):
 
 
 def run_exploration(on_map_ready=None, control=None):
-    from src.grid_slam import FrontierExplorer
+    from src.grid_slam import FrontierExplorer, GridSLAM
     from src.slam_hardware import HardwareBackend
     system = RobotSystem()
     explorer = None
     recorder = system.telemetry
     map_file = Path(recorder.run_dir) / '{}_{}_map.json'.format(recorder.run_name, recorder.timestamp_str)
-    if on_map_ready:
-        on_map_ready(map_file)
-    if control:
-        control.set_system(system)
-    try:
-        if not system.connect_robot():
-            return 1
-        if control and control.cancel.is_set():
-            return 1
-        system.setup_threads()
-        system.thread_1_sensor.start_collecting()
-        system.thread_2_controller.enable_motion()
-        explorer = FrontierExplorer(HardwareBackend(system), map_file)
-        deadline = time.monotonic() + setting("slam.sensor_timeout_sec")
-        while system.sensor_hub.get_latest_state().frame_index == 0:
-            if time.monotonic() > deadline:
-                raise RuntimeError("No initial position/attitude data")
-            time.sleep(0.01)
-        success = explorer.run()
-    except (Exception, KeyboardInterrupt) as exc:
-        if explorer is None:
-            print("[SLAM] Startup failed: {}".format(exc))
-            return 1
-        explorer.status = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
-        explorer.error = str(exc)
-        explorer.slam.export(explorer.output, explorer.status, explorer.error)
-        success = False
-    finally:
-        system.shutdown()
-    from src.slam_report import save_report
-    plot, actions = save_report(explorer.output)
-    print("[SLAM] map={} | actions={}".format(plot, actions))
-    print("[SLAM] {} | visited={} | moves={} | data={}".format(
-        explorer.status, len(explorer.slam.map.visited), explorer.moves, explorer.output))
-    if explorer.error:
-        print("[SLAM] " + explorer.error)
-    return 0 if success else 1
+    GridSLAM().export(map_file, 'not_started')
+    status, error = 'not_started', ''
+    with capture_console(map_file.parent / 'console.log'):
+        if on_map_ready:
+            on_map_ready(map_file)
+        if control:
+            control.set_system(system)
+        try:
+            if not system.connect_robot():
+                raise RuntimeError('Could not connect to RoboMaster EP')
+            if control and control.cancel.is_set():
+                raise KeyboardInterrupt
+            system.setup_threads()
+            system.thread_1_sensor.start_collecting()
+            system.thread_2_controller.enable_motion()
+            explorer = FrontierExplorer(HardwareBackend(system), map_file)
+            deadline = time.monotonic() + setting("slam.sensor_timeout_sec")
+            while system.sensor_hub.get_latest_state().frame_index == 0:
+                if time.monotonic() > deadline:
+                    raise RuntimeError("No initial position/attitude data")
+                time.sleep(0.01)
+            success = explorer.run()
+        except (Exception, KeyboardInterrupt) as exc:
+            status = 'interrupted' if isinstance(exc, KeyboardInterrupt) else 'failed'
+            error = str(exc)
+            if explorer is None:
+                print("[SLAM] Startup failed: {}".format(exc))
+                GridSLAM().export(map_file, status, error)
+            else:
+                explorer.status, explorer.error = status, error
+                explorer.slam.export(explorer.output, status, error)
+            success = False
+        finally:
+            try:
+                system.shutdown()
+            except Exception as error:
+                print('[SLAM] Telemetry shutdown warning: {}'.format(error))
+                success = False
+        from src.slam_report import save_report
+        plot, actions = save_report(map_file)
+        print("[SLAM] map={} | actions={}".format(plot, actions))
+        print("[SLAM] {} | visited={} | moves={} | data={}".format(
+            explorer.status if explorer else status,
+            len(explorer.slam.map.visited) if explorer else 0,
+            explorer.moves if explorer else 0, map_file))
+        if explorer and explorer.error:
+            print("[SLAM] " + explorer.error)
+        return 0 if success else 1
 
 
 def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None,
-                              control=None, fire_type='water_fire', on_frame=None):
-    """Explore with SLAM, detect signs, and fire at each confirmed target."""
+                              control=None, fire_type='water_fire', on_frame=None,
+                              target_color='Red', target_shape='All'):
+    """Explore with SLAM, detect signs, and fire at matching confirmed targets."""
     import slam_detect_camera
     conn_type = conn_type or setting('robot.conn_type')
     calib = Path(project_path('paths.calibration'))
@@ -273,61 +276,77 @@ def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None,
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     output_path = mission_dir / f"run_detect_{timestamp}" / "explored_map.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    from src.grid_slam import GridSLAM
+    GridSLAM().export(output_path, 'not_started')
 
-    if on_map_ready:
-        on_map_ready(output_path)
+    with capture_console(output_path.parent / 'console.log'):
+        if on_map_ready:
+            on_map_ready(output_path)
 
-    success = False
-    try:
-        if mock:
-            success = slam_detect_camera.run_simulation(
-                camera_index=0, output=output_path, control=control, on_frame=on_frame)
-        else:
-            success = slam_detect_camera.run_hardware(
-                conn_type, calib, output_path, control=control, fire_type=fire_type,
-                on_frame=on_frame,
-            )
-    except (Exception, KeyboardInterrupt) as exc:
-        print(f"[Explore-Detect] Note: {exc}")
-    finally:
+        success = False
+        try:
+            if mock:
+                success = slam_detect_camera.run_simulation(
+                    camera_index=0, output=output_path, control=control, on_frame=on_frame)
+            else:
+                success = slam_detect_camera.run_hardware(
+                    conn_type, calib, output_path, control=control, fire_type=fire_type,
+                    on_frame=on_frame, target_color=target_color, target_shape=target_shape,
+                )
+        except (Exception, KeyboardInterrupt) as exc:
+            status = 'interrupted' if isinstance(exc, KeyboardInterrupt) else 'failed'
+            detail = str(exc) or 'Interrupted by user'
+            print(f"[Explore-Detect] {status}: {detail}")
+            _mark_unfinished_map(output_path, status, detail)
+        finally:
+            if not success:
+                status = 'interrupted' if control and control.cancel.is_set() else 'failed'
+                _mark_unfinished_map(output_path, status, 'Mission stopped before exploration completed')
+            if output_path.exists():
+                try:
+                    map_img = slam_detect_camera.render_map_image(output_path)
+                    print(f"[Explore-Detect] 🗺️ บันทึกภาพแผนที่สำเร็จ: {map_img}")
+                except Exception as e:
+                    print(f"[Explore-Detect] Warning: ไม่สามารถเรนเดอร์ภาพแผนที่ได้: {e}")
         if output_path.exists():
             try:
-                map_img = slam_detect_camera.render_map_image(output_path)
-                print(f"[Explore-Detect] 🗺️ บันทึกภาพแผนที่สำเร็จ: {map_img}")
-            except Exception as e:
-                print(f"[Explore-Detect] Warning: ไม่สามารถเรนเดอร์ภาพแผนที่ได้: {e}")
-    if output_path.exists():
-        try:
-            slam_detect_camera.save_mission_reports(output_path)
-        except Exception as error:
-            print('[Explore-Detect] Report warning: {}'.format(error))
-    return 0 if success else 1
+                slam_detect_camera.save_mission_reports(output_path)
+            except Exception as error:
+                print('[Explore-Detect] Report warning: {}'.format(error))
+        return 0 if success else 1
+
+
+def _mark_unfinished_map(path, status, error):
+    """Preserve a partial map while recording failures before the explorer starts."""
+    if not path.exists():
+        return
+    data = json.loads(path.read_text(encoding='utf-8'))
+    if data.get('status') not in ('not_started', 'running'):
+        return
+    data['status'], data['error'] = status, error
+    temp = path.with_suffix(path.suffix + '.tmp')
+    temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+    temp.replace(path)
 
 
 def run_camera_detection(mode: str = 'robot-ap', control=None, on_frame=None):
     """Live target detection with 3 confirmation snapshots."""
     import detect_camera
-    orig_argv = list(sys.argv)
-    if mode == 'webcam':
-        sys.argv = ['detect_camera.py', '--webcam']
-    elif mode == 'robot-sta':
-        sys.argv = ['detect_camera.py', '--conn-type', 'sta']
-    else:
-        sys.argv = ['detect_camera.py', '--conn-type', 'ap']
     try:
         detect_camera.main(
             on_frame=on_frame,
             cancel=control.cancel if control is not None else None,
+            webcam=mode == 'webcam',
+            conn_type='sta' if mode == 'robot-sta' else 'ap',
         )
         return 0
     except Exception as exc:
         print(f"[Detect-Camera] Error: {exc}")
         return 1
-    finally:
-        sys.argv = orig_argv
 
 
-def run_fire_test(conn_type=None, fire_type='water_fire', control=None, on_frame=None):
+def run_fire_test(conn_type=None, fire_type='water_fire', control=None, on_frame=None,
+                  target_color='Red', target_shape='All'):
     """Use only the camera, Gimbal, and blaster while the chassis stays still."""
     from src.fire_test import run_stationary_fire
 
@@ -335,42 +354,44 @@ def run_fire_test(conn_type=None, fire_type='water_fire', control=None, on_frame
     run_stationary_fire(
         conn_type=conn_type or setting('robot.conn_type'),
         fire_type=fire_type,
+        target_color=target_color,
+        target_shape=target_shape,
         cancel=cancel,
         on_frame=on_frame,
     )
     return 1 if cancel is not None and cancel.is_set() else 0
 
 
-def run_menu():
-    """Interactive menu fallback."""
-    selection = select_operation()
-    if selection is None:
-        return 0
-    task, parameters = selection
-    handlers = {
-        'explore': run_exploration,
-        'explore-detect': lambda: run_exploration_detection(
-            fire_type=parameters['fire_type']),
-        'detect-camera': lambda: run_camera_detection(parameters['mode']),
-        'fire-test': lambda: run_fire_test(fire_type=parameters['fire_type']),
-        'step-test': test_step,
-        'turn-test': lambda: test_turn(parameters['direction']),
-        'monitor': monitor_sensors,
-        'motion': lambda: run_motion_test(parameters['commands']),
-        'calibrate': lambda: calibrate_sensors(parameters['action']),
-        'analysis': lambda: analyze_log(parameters['file']),
-        'gimbal-test': test_gimbal,
-    }
-    return handlers[task]() or 0
-
-
 def main():
+    def interrupt_on_termination(_signum, _frame):
+        raise KeyboardInterrupt
+
+    termination_signals = [signal.SIGTERM]
+    if hasattr(signal, 'SIGHUP'):
+        termination_signals.append(signal.SIGHUP)
+    previous_handlers = {signum: signal.getsignal(signum) for signum in termination_signals}
+    for signum in termination_signals:
+        signal.signal(signum, interrupt_on_termination)
     try:
-        OperationGUI(run_selected).run()
+        gui = OperationGUI(run_selected)
+        gui.run()
+        if gui.proceed_to_explore:
+            return run_exploration_detection(
+                conn_type=gui.selected_conn_type,
+                fire_type=gui.selected_fire_type,
+                target_color=gui.selected_target_color,
+                target_shape=gui.selected_target_shape,
+            )
         return 0
+    except KeyboardInterrupt:
+        print('[Main] หยุดงานตามคำสั่ง interrupt', file=sys.stderr)
+        return 130
     except Exception as exc:
         print('[GUI] {}'.format(exc), file=sys.stderr)
         return 1
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 def run_selected(task, parameters, gui, control):
@@ -382,14 +403,20 @@ def run_selected(task, parameters, gui, control):
             on_map_ready=gui.show_map,
             control=control,
             fire_type=parameters.get('fire_type', 'water_fire'),
+            target_color=parameters.get('target_color', 'Red'),
+            target_shape=parameters.get('target_shape', 'All'),
             on_frame=gui.show_fire_frame,
         ),
         'detect-camera': lambda: run_camera_detection(
             parameters.get('mode', 'robot-ap'), control=control,
             on_frame=gui.show_fire_frame),
+        'detect-webcam': lambda: run_camera_detection(
+            'webcam', control=control, on_frame=gui.show_fire_frame),
         'fire-test': lambda: run_fire_test(
             conn_type=parameters.get('conn_type', setting('robot.conn_type')),
             fire_type=parameters.get('fire_type', 'water_fire'),
+            target_color=parameters.get('target_color', 'Red'),
+            target_shape=parameters.get('target_shape', 'All'),
             control=control,
             on_frame=gui.show_fire_frame,
         ),
@@ -405,103 +432,6 @@ def run_selected(task, parameters, gui, control):
     }
     return handlers[task]() or 0
 
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(
-        description="RoboMaster EP - สำรวจ Grid SLAM และเล็งยิงทุกเป้าหมาย"
-    )
-    parser.add_argument(
-        "--cli", action="store_true",
-        help="รันตรงใน Command-line ทันที โดยไม่ต้องเปิดหน้าต่าง GUI ก่อน",
-    )
-    parser.add_argument(
-        "--gui", action="store_true",
-        help="เปิดหน้าต่าง GUI (ค่าเริ่มต้นเปิดให้อัตโนมัติอยู่แล้ว)",
-    )
-    parser.add_argument(
-        "--no-camera", action="store_true",
-        help="ให้หุ่นเคลื่อนที่สำรวจอย่างเดียว โดยไม่ต้องใช้กล้อง / ไม่ตรวจจับเป้าหมาย",
-    )
-    parser.add_argument(
-        "--conn-type", choices=("ap", "sta"), default=setting("robot.conn_type"),
-        help="โหมดการเชื่อมต่อหุ่นยนต์ (ap หรือ sta, ค่าเริ่มต้น: ap)",
-    )
-    parser.add_argument(
-        "--fire-type", choices=("water_fire", "infared_fire", "infrared_fire"),
-        default="water_fire", help="ชนิดการยิงเมื่อพบเป้า (ค่าเริ่มต้น: water_fire)",
-    )
-    parser.add_argument(
-        "--mock", action="store_true",
-        help="รันโหมดจำลอง (Simulator)",
-    )
-    parser.add_argument(
-        "--step", action="store_true",
-        help="ทดสอบเดินหน้า 1 ช่อง (เคลื่อนที่อย่างเดียว ไม่ใช้กล้อง)",
-    )
-    parser.add_argument(
-        "--fire-test", action="store_true",
-        help="ทดสอบกล้อง เล็ง Gimbal และยิงเป้า โดยไม่ให้หุ่นเดิน",
-    )
-    parser.add_argument(
-        "--turn", choices=("left", "right", "around"), default=None,
-        help="ทดสอบเลี้ยว (left=ซ้าย 90 องศา, right=ขวา 90 องศา, around=กลับหลัง 180 องศา)",
-    )
-    parser.add_argument(
-        "--menu", action="store_true",
-        help="เปิดเมนูเลือกคำสั่งแบบ Interactive Text Menu",
-    )
-    args, unknown = parser.parse_known_args()
-
-    try:
-        # 1. กรณีระบุคำสั่งเจาะจงผ่าน CLI
-        if args.menu:
-            return run_menu()
-        if args.fire_test:
-            return run_fire_test(conn_type=args.conn_type, fire_type=args.fire_type)
-        if args.step:
-            return test_step()
-        if args.turn:
-            return test_turn(args.turn)
-        if args.no_camera:
-            print("[SLAM] เริ่มการสำรวจและสร้างแผนที่ (เคลื่อนที่อย่างเดียว ไม่ใช้กล้อง)")
-            return run_exploration()
-        if args.cli:
-            print("=" * 65)
-            print("🚀 เริ่มภารกิจ (CLI Mode): สำรวจ Grid SLAM + เล็งยิงทุกเป้าหมาย")
-            print(f"📡 โหมดเชื่อมต่อ: {args.conn_type.upper()}")
-            print(f"🎯 ชนิดการยิง: {args.fire_type}")
-            print("=" * 65)
-            return run_exploration_detection(
-                conn_type=args.conn_type, mock=args.mock, fire_type=args.fire_type
-            )
-
-        # 2. ค่าเริ่มต้น (Default): เปิดหน้าต่าง GUI ขึ้นมาก่อนเสมอ
-        from src.operation_menu import OperationGUI
-        gui = OperationGUI(run_selected)
-        gui.run()
-
-        # ถ้าผู้ใช้กดปุ่ม 'ปิด GUI แล้วเริ่มสำรวจทันที' จากในหน้าต่าง GUI
-        if getattr(gui, 'proceed_to_explore', False):
-            conn_type = getattr(gui, 'selected_conn_type', args.conn_type)
-            fire_type = getattr(gui, 'selected_fire_type', args.fire_type)
-            print("=" * 65)
-            print("🚀 เริ่มภารกิจ: สำรวจ Grid SLAM + เล็งยิงทุกเป้าหมาย")
-            print(f"📡 โหมดเชื่อมต่อ: {conn_type.upper()}")
-            print(f"🎯 ชนิดการยิง: {fire_type}")
-            print("=" * 65)
-            return run_exploration_detection(
-                conn_type=conn_type, mock=args.mock, fire_type=fire_type
-            )
-
-        return 0
-
-    except (EOFError, KeyboardInterrupt):
-        print('\nหยุดการทำงานโดยผู้ใช้')
-        return 0
-    except Exception as exc:
-        print(f'[main] Error: {exc}', file=sys.stderr)
-        return 1
 
 
 if __name__ == '__main__':

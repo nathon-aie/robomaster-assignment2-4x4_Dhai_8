@@ -1,68 +1,104 @@
 """Interactive operation selection and live GUI for RoboMaster EP."""
-import base64
 import json
 import queue
+import signal
 import sys
 import threading
+import time
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
+from PIL import Image, ImageTk
 
 from .settings import get as setting, map_geometry, project_path
+
+
+TARGET_COLOR_OPTIONS = (('แดง', 'Red'), ('เหลือง', 'Yellow'),
+                        ('น้ำเงิน', 'Blue'), ('เขียว', 'Green'))
+TARGET_SHAPE_OPTIONS = (('วงกลม', 'Circle'), ('สี่เหลี่ยมจตุรัส', 'Square'),
+                        ('สี่เหลี่ยมผืนผ้าแนวตั้ง', 'Vertical_Rect'),
+                        ('สี่เหลี่ยมผืนผ้าแนวนอน', 'Horizontal_Rect'),
+                        ('รูปทรงทั้งหมดในตัวเลือกนี้', 'All'))
+PREVIEW_INTERVAL_SEC = 1 / 30
+PREVIEW_MAX_WIDTH = 1280
 
 
 class RunControl:
     def __init__(self):
         self.cancel = threading.Event()
         self.system = None
+        self.stopped_controller = None
 
     def set_system(self, system):
         self.system = system
         if self.cancel.is_set():
-            self.stop()
+            self._stop_controller()
 
     def stop(self):
         self.cancel.set()
+        self._stop_controller()
+
+    def _stop_controller(self):
         controller = getattr(self.system, 'thread_2_controller', None)
-        if controller is not None:
+        if controller is not None and controller is not self.stopped_controller:
+            self.stopped_controller = controller
             threading.Thread(target=controller.stop_running, daemon=True).start()
 
 
 class _GuiWriter:
-    def __init__(self, messages):
+    def __init__(self, messages, log_path):
         self.messages = messages
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.stream = log_path.open('a', encoding='utf-8', buffering=1)
+        self.lock = threading.Lock()
 
     def write(self, value):
         if value:
             self.messages.put(('log', value))
+            with self.lock:
+                self.stream.write(value)
 
     def flush(self):
-        pass
+        with self.lock:
+            self.stream.flush()
+
+    def close(self):
+        with self.lock:
+            self.stream.close()
 
 
 class OperationGUI:
     def __init__(self, runner):
         self.root = tk.Tk()
         self.root.title('RoboMaster EP — ระบบควบคุมและสำรวจอัตโนมัติ')
-        self.root.geometry('1100x740')
+        self.root.geometry('1220x780')
+        self.root.attributes('-fullscreen', True)
         self.runner = runner
         self.messages = queue.Queue()
         self.control = None
         self.worker = None
+        self.closing = False
+        self.interrupt_requested = threading.Event()
         self.map_path = None
         self.map_mtime = None
         self.map_data = None
         self.proceed_to_explore = False
         self.selected_conn_type = 'ap'
         self.selected_fire_type = 'water_fire'
-        self.fire_preview_window = None
-        self.fire_preview_label = None
-        self.fire_preview_frame = None
+        self.selected_target_color = 'Red'
+        self.selected_target_shape = 'All'
+        self.fire_preview_active = False
+        self.fire_preview_rgb = None
         self.fire_preview_lock = threading.Lock()
+        self.preview_size = (720, 400)
+        self.next_fire_preview_at = 0.0
         self.old_stdout, self.old_stderr = sys.stdout, sys.stderr
         self._build()
         self.root.protocol('WM_DELETE_WINDOW', self._close)
+        self.root.bind('<Escape>', lambda _: self.root.attributes('-fullscreen', False))
+        self.root.bind('<F11>', self._toggle_fullscreen)
         self.root.after(100, self._poll)
+        self.root.after(33, self._render_fire_preview)
         self.root.after(400, self._refresh_map)
         self._draw_map()
 
@@ -86,7 +122,7 @@ class OperationGUI:
         right.pack(side='left', fill='both', expand=True)
 
         # ---------------- Section 1: Main Mission ----------------
-        mission_box = ttk.LabelFrame(left, text=' 🚀 ภารกิจหลัก (Main Mission) ', padding=8)
+        mission_box = ttk.LabelFrame(left, text=' ภารกิจหลัก (Main Mission) ', padding=8)
         mission_box.pack(fill='x', pady=(0, 10))
 
         ttk.Label(mission_box, text='โหมดการเชื่อมต่อหุ่นยนต์:').pack(anchor='w', pady=(0, 2))
@@ -102,17 +138,39 @@ class OperationGUI:
         self.fire_mode.current(0)
         self.fire_mode.pack(fill='x', pady=(0, 8))
 
+        target_row = ttk.Frame(mission_box)
+        target_row.pack(fill='x', pady=(0, 8))
+        color_field = ttk.Frame(target_row)
+        color_field.pack(side='left', fill='x', expand=True, padx=(0, 4))
+        shape_field = ttk.Frame(target_row)
+        shape_field.pack(side='left', fill='x', expand=True)
+        ttk.Label(color_field, text='สีเป้าที่จะยิง:').pack(anchor='w', pady=(0, 2))
+        self.target_color = ttk.Combobox(
+            color_field, state='readonly',
+            values=[label for label, _ in TARGET_COLOR_OPTIONS], width=12,
+        )
+        self.target_color.current(0)
+        self.target_color.pack(fill='x')
+
+        ttk.Label(shape_field, text='รูปร่างเป้าที่จะยิง:').pack(anchor='w', pady=(0, 2))
+        self.target_shape = ttk.Combobox(
+            shape_field, state='readonly',
+            values=[label for label, _ in TARGET_SHAPE_OPTIONS], width=23,
+        )
+        self.target_shape.current(4)
+        self.target_shape.pack(fill='x')
+
         self.start_explore_btn = ttk.Button(
             mission_box,
-            text='🚀 เริ่มสำรวจ + เล็งยิงทุกเป้าหมาย',
+            text='เริ่มสำรวจ + เล็งยิงเป้าที่เลือก',
             command=lambda: self._select('explore-detect')
         )
         self.start_explore_btn.pack(fill='x', ipady=4, pady=(0, 4))
 
         self.direct_explore_btn = ttk.Button(
             mission_box,
-            text='🚪 ปิด GUI แล้วเริ่มสำรวจและยิง',
-            command=self._proceed_headless
+            text='ปิด GUI แล้วเริ่มสำรวจและยิง',
+            command=self._proceed_headless,
         )
         self.direct_explore_btn.pack(fill='x', pady=(0, 2))
 
@@ -120,17 +178,18 @@ class OperationGUI:
         tools_box = ttk.LabelFrame(left, text=' 🛠️ เตรียมความพร้อม / ทดสอบ ', padding=8)
         tools_box.pack(fill='x', pady=(0, 8))
 
-        self.task_buttons = [self.start_explore_btn]
+        self.task_buttons = [self.start_explore_btn, self.direct_explore_btn]
         for label, task in [
-            ('🎯 ตรวจจับเป้าหมายจากกล้องสด (ทดสอบกล้อง)', 'detect-camera'),
-            ('💧 ทดสอบเล็งและยิง (หุ่นไม่เดิน)', 'fire-test'),
-            ('🗺️ สำรวจ SLAM (เฉพาะเดิน ไม่ใช้กล้อง)', 'explore'),
-            ('👣 ทดสอบเดินหน้า 1 ช่อง', 'step-test'),
-            ('🔄 ทดสอบเลี้ยว', 'turn-test'),
-            ('📡 ดูเซนเซอร์สด', 'monitor'),
-            ('🕹️ ทดสอบ Gimbal', 'gimbal-test'),
+            ('ตรวจจับเป้าหมายจากกล้องสด (ทดสอบกล้อง)', 'detect-camera'),
+            ('ตรวจจับเป้าหมายจากเว็บแคม', 'detect-webcam'),
+            ('ทดสอบเล็งและยิง (หุ่นไม่เดิน)', 'fire-test'),
+            ('สำรวจ SLAM (เฉพาะเดิน ไม่ใช้กล้อง)', 'explore'),
+            ('ทดสอบเดินหน้า 1 ช่อง', 'step-test'),
+            ('ทดสอบเลี้ยว', 'turn-test'),
+            ('ดูเซนเซอร์สด', 'monitor'),
+            ('ทดสอบ Gimbal', 'gimbal-test'),
             ('Calibration เซนเซอร์', 'calibrate'),
-            ('📊 วิเคราะห์ Log', 'analysis'),
+            ('วิเคราะห์ Log', 'analysis'),
         ]:
             button = ttk.Button(tools_box, text=label, command=lambda t=task: self._select(t))
             button.pack(fill='x', pady=2)
@@ -156,17 +215,32 @@ class OperationGUI:
 
         self.stop_button = ttk.Button(ctrl_box, text='🛑 หยุดงาน (Stop)', command=self._stop, state='disabled')
         self.stop_button.pack(fill='x', ipady=3)
+        ttk.Label(ctrl_box, text='Esc: ออกจากเต็มจอ   F11: สลับเต็มจอ').pack(anchor='w', pady=(5, 0))
 
-        # ---------------- Right Side: Live SLAM Map ----------------
+        # ---------------- Right Side: Live SLAM Map and Camera ----------------
+        map_frame = ttk.Frame(right)
+        map_frame.pack(side='left', fill='both', expand=True)
         self.map_status = tk.StringVar(value='ยังไม่มีแผนที่')
-        ttk.Label(right, textvariable=self.map_status, font=('', 11, 'bold')).pack(anchor='w', pady=(0, 5))
+        ttk.Label(map_frame, textvariable=self.map_status, font=('', 11, 'bold')).pack(anchor='w', pady=(0, 5))
 
-        self.canvas = tk.Canvas(right, background='white', highlightthickness=1,
+        self.canvas = tk.Canvas(map_frame, background='white', highlightthickness=1,
                                 highlightbackground='#aaaaaa')
         self.canvas.pack(fill='both', expand=True)
         self.canvas.bind('<Configure>', lambda _: self._draw_map())
 
-        ttk.Label(right, text='🟩 จุดเริ่ม   🟦 สำรวจแล้ว   🟧 หุ่นยนต์   ⬛ กำแพง   🔴/🔵 เป้าหมายที่พบ').pack(anchor='w', pady=4)
+        ttk.Label(map_frame, text='🟩 จุดเริ่ม   🟦 สำรวจแล้ว   🟧 หุ่นยนต์   ⬛ กำแพง   🔴/🔵 เป้าหมายที่พบ').pack(anchor='w', pady=4)
+
+        self.preview_column = ttk.Frame(right, width=600)
+        self.preview_column.pack_propagate(False)
+        self.camera_frame = ttk.LabelFrame(self.preview_column, text=' กล้อง ', padding=4)
+        self.camera_frame.pack(fill='both', expand=True, pady=(0, 4))
+        self.camera_frame.bind('<Configure>', self._update_preview_size)
+        self.fire_preview_label = ttk.Label(self.camera_frame, text='กำลังรอภาพจากกล้อง...', anchor='center')
+        self.fire_preview_label.pack(fill='both', expand=True)
+        self.mask_frame = ttk.LabelFrame(self.preview_column, text=' Mask ', padding=4)
+        self.mask_frame.pack(fill='both', expand=True, pady=(4, 0))
+        self.mask_preview_label = ttk.Label(self.mask_frame, text='กำลังรอภาพ mask...', anchor='center')
+        self.mask_preview_label.pack(fill='both', expand=True)
 
         # ---------------- Bottom: Log View ----------------
         log_frame = ttk.LabelFrame(outer, text=' บันทึกการทำงาน (Log Output) ', padding=6)
@@ -176,9 +250,10 @@ class OperationGUI:
         self.log.pack(fill='x')
 
     def _proceed_headless(self):
-        """Close GUI and tell main() to run exploration on the main thread."""
         self.selected_conn_type = 'ap' if self.conn_mode.current() == 0 else 'sta'
         self.selected_fire_type = self.fire_mode.get()
+        self.selected_target_color = TARGET_COLOR_OPTIONS[self.target_color.current()][1]
+        self.selected_target_shape = TARGET_SHAPE_OPTIONS[self.target_shape.current()][1]
         self.proceed_to_explore = True
         self._close()
 
@@ -187,11 +262,17 @@ class OperationGUI:
         if task == 'explore-detect':
             params['conn_type'] = 'ap' if self.conn_mode.current() == 0 else 'sta'
             params['fire_type'] = self.fire_mode.get()
+            params['target_color'] = TARGET_COLOR_OPTIONS[self.target_color.current()][1]
+            params['target_shape'] = TARGET_SHAPE_OPTIONS[self.target_shape.current()][1]
         elif task == 'fire-test':
             params['conn_type'] = 'ap' if self.conn_mode.current() == 0 else 'sta'
             params['fire_type'] = self.fire_mode.get()
+            params['target_color'] = TARGET_COLOR_OPTIONS[self.target_color.current()][1]
+            params['target_shape'] = TARGET_SHAPE_OPTIONS[self.target_shape.current()][1]
         elif task == 'detect-camera':
             params['mode'] = 'robot-ap' if self.conn_mode.current() == 0 else 'robot-sta'
+        elif task == 'detect-webcam':
+            params['mode'] = 'webcam'
         elif task == 'turn-test':
             params['direction'] = ('right', 'left', 'around')[self.turn.current()]
         elif task == 'motion':
@@ -211,7 +292,7 @@ class OperationGUI:
             params['file'] = path
 
         self.control = RunControl()
-        if task in ('fire-test', 'explore-detect', 'detect-camera'):
+        if task in ('fire-test', 'explore-detect', 'detect-camera', 'detect-webcam'):
             self._open_fire_preview(task)
         self.status.set('กำลังทำงาน: ' + task)
         for button in self.task_buttons:
@@ -233,30 +314,69 @@ class OperationGUI:
             self.status.set('กำลังหยุดงาน...')
             self.control.stop()
 
-    def _open_fire_preview(self, task):
-        window = tk.Toplevel(self.root)
-        window.title('RoboMaster — ภาพกล้อง ({})'.format(task))
-        window.protocol('WM_DELETE_WINDOW', self._stop_fire_preview)
-        self.fire_preview_window = window
-        self.fire_preview_label = ttk.Label(window, text='กำลังรอภาพจากกล้อง...')
-        self.fire_preview_label.pack(padx=8, pady=8)
+    def _toggle_fullscreen(self, _event=None):
+        fullscreen = bool(int(self.root.attributes('-fullscreen')))
+        self.root.attributes('-fullscreen', not fullscreen)
 
-    def _stop_fire_preview(self):
-        self._stop()
-        self._close_fire_preview()
+    def _update_preview_size(self, event):
+        if event.width > 80 and event.height > 80:
+            with self.fire_preview_lock:
+                self.preview_size = (min(PREVIEW_MAX_WIDTH, event.width - 16), event.height - 28)
+
+    def _open_fire_preview(self, task):
+        self.camera_frame.configure(text=' กล้อง ({}) '.format(task))
+        self.preview_column.pack(side='right', fill='both', expand=True, padx=(8, 0))
+        with self.fire_preview_lock:
+            self.fire_preview_active = True
+            self.fire_preview_rgb = None
+            self.next_fire_preview_at = 0.0
 
     def _close_fire_preview(self):
-        if self.fire_preview_window is not None:
-            self.fire_preview_window.destroy()
-            self.fire_preview_window = None
-            self.fire_preview_label = None
         with self.fire_preview_lock:
-            self.fire_preview_frame = None
+            self.fire_preview_active = False
+            self.fire_preview_rgb = None
+        self.fire_preview_label.configure(image='', text='กำลังรอภาพจากกล้อง...')
+        self.fire_preview_label.image = None
+        self.mask_preview_label.configure(image='', text='กำลังรอภาพ mask...')
+        self.mask_preview_label.image = None
+        self.preview_column.pack_forget()
 
     def show_fire_frame(self, frame):
-        """Accept a camera frame from the robot worker; Tk renders it on its own thread."""
+        """Keep only the latest camera frame for the Tk preview."""
+        now = time.monotonic()
         with self.fire_preview_lock:
-            self.fire_preview_frame = frame
+            if now < self.next_fire_preview_at or not self.fire_preview_active:
+                return
+            self.next_fire_preview_at = now + PREVIEW_INTERVAL_SEC
+            target_width, target_height = self.preview_size
+        import cv2
+        height, width = frame.shape[:2]
+        panel_width = (width - 3) // 2
+        if panel_width <= 0:
+            return
+        panels = (frame[:, :panel_width], frame[:, -panel_width:])
+        rgb_panels = []
+        for panel in panels:
+            scale = min(target_width / panel_width, target_height / height)
+            target_size = (max(1, round(panel_width * scale)), max(1, round(height * scale)))
+            if target_size != (panel_width, height):
+                interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+                panel = cv2.resize(panel, target_size, interpolation=interpolation)
+            rgb_panels.append(cv2.cvtColor(panel, cv2.COLOR_BGR2RGB))
+        with self.fire_preview_lock:
+            if self.fire_preview_active:
+                self.fire_preview_rgb = tuple(rgb_panels)
+
+    def _render_fire_preview(self):
+        with self.fire_preview_lock:
+            panels = self.fire_preview_rgb if self.fire_preview_active else None
+            self.fire_preview_rgb = None
+        if panels is not None:
+            for panel, label in zip(panels, (self.fire_preview_label, self.mask_preview_label)):
+                photo = ImageTk.PhotoImage(Image.fromarray(panel), master=self.root)
+                label.configure(image=photo, text='')
+                label.image = photo
+        self.root.after(33, self._render_fire_preview)
 
     def show_map(self, path):
         self.messages.put(('map', str(path)))
@@ -271,14 +391,18 @@ class OperationGUI:
         return None if self.control and self.control.cancel.is_set() else answer[0]
 
     def _poll(self):
+        if self.interrupt_requested.is_set():
+            self.interrupt_requested.clear()
+            self._close()
+            if self.closing:
+                return
+        log_parts = []
         try:
-            while True:
+            # Keep Tk responsive when the robot produces log messages continuously.
+            for _ in range(100):
                 message = self.messages.get_nowait()
                 if message[0] == 'log':
-                    self.log.configure(state='normal')
-                    self.log.insert('end', message[1])
-                    self.log.see('end')
-                    self.log.configure(state='disabled')
+                    log_parts.append(message[1])
                 elif message[0] == 'map':
                     self.map_path = Path(message[1])
                     self.map_mtime = None
@@ -292,7 +416,7 @@ class OperationGUI:
                     ready.set()
                 elif message[0] == 'done':
                     _, task, result = message
-                    if task in ('fire-test', 'explore-detect', 'detect-camera'):
+                    if task in ('fire-test', 'explore-detect', 'detect-camera', 'detect-webcam'):
                         self._close_fire_preview()
                     self.status.set('{}: {}'.format(task, 'เสร็จสมบูรณ์' if result == 0 else 'หยุด/ไม่สำเร็จ'))
                     self.stop_button.configure(state='disabled')
@@ -301,21 +425,13 @@ class OperationGUI:
                     self.control = None
         except queue.Empty:
             pass
-        if self.fire_preview_label is not None:
-            with self.fire_preview_lock:
-                frame = self.fire_preview_frame
-                self.fire_preview_frame = None
-            if frame is not None:
-                import cv2
-                height, width = frame.shape[:2]
-                if width > 1050:
-                    frame = cv2.resize(frame, (1050, round(height * 1050 / width)))
-                encoded, png = cv2.imencode('.png', frame)
-                if encoded:
-                    photo = tk.PhotoImage(
-                        data=base64.b64encode(png.tobytes()).decode('ascii'), format='png')
-                    self.fire_preview_label.configure(image=photo, text='')
-                    self.fire_preview_label.image = photo
+        if log_parts:
+            self.log.configure(state='normal')
+            self.log.insert('end', ''.join(log_parts))
+            if int(self.log.index('end-1c').split('.')[0]) > 3000:
+                self.log.delete('1.0', '1001.0')
+            self.log.see('end')
+            self.log.configure(state='disabled')
         self.root.after(100, self._poll)
 
     def _refresh_map(self):
@@ -412,98 +528,34 @@ class OperationGUI:
                 data['status'], len(visited), rows * columns, sign_count, row, column))
 
     def _close(self):
+        if not self.closing:
+            self.closing = True
+            if self.worker and self.worker.is_alive():
+                self._stop()
         if self.worker and self.worker.is_alive():
-            self._stop()
             self.root.after(200, self._close)
             return
-        sys.stdout, sys.stderr = self.old_stdout, self.old_stderr
         self.root.destroy()
 
     def run(self):
-        sys.stdout = _GuiWriter(self.messages)
-        sys.stderr = _GuiWriter(self.messages)
-        self.root.mainloop()
-
-
-# Terminal / CLI interactive functions:
-def choose(title, options):
-    print('\n' + title)
-    for number, (label, _) in enumerate(options, 1):
-        print('  {}. {}'.format(number, label))
-    print('  0. ออก / ยกเลิก')
-    while True:
-        value = input('เลือกหมายเลข: ').strip()
-        if value == '0':
-            return None
-        if value.isdigit() and 1 <= int(value) <= len(options):
-            return options[int(value) - 1][1]
-        print('กรุณาเลือกหมายเลข 0–{}'.format(len(options)))
-
-
-def calibration_action():
-    return choose('เลือก Calibration', [
-        ('Sharp ซ้าย', 'sharp_left'),
-        ('Sharp ขวา', 'sharp_right'),
-        ('ToF', 'tof'),
-        ('คำนวณสมการ', 'fit'),
-    ])
-
-
-def select_operation():
-    """Return (task, function parameters), or None on cancellation."""
-    try:
-        task = choose('RoboMaster EP — เลือกงาน (ค่าพื้นฐานอ่านจาก config/settings.yaml)', [
-            ('สำรวจและสร้างแผนที่ SLAM + BFS', 'explore'),
-            ('สำรวจ SLAM + เล็งยิงทุกเป้าหมาย', 'explore-detect'),
-            ('ทดสอบตรวจจับเป้าหมายจากกล้อง (Auto Capture 3 รูป)', 'detect-camera'),
-            ('ทดสอบเล็งและยิงเป้า (หุ่นไม่เดิน)', 'fire-test'),
-            ('ทดสอบเดินหน้า 1 ช่อง', 'step-test'),
-            ('ทดสอบเลี้ยว', 'turn-test'),
-            ('ดูเซนเซอร์สด', 'monitor'),
-            ('ทดสอบชุดคำสั่งเดิน', 'motion'),
-            ('Calibration เซนเซอร์', 'calibrate'),
-            ('วิเคราะห์ Log', 'analysis'),
-            ('ทดสอบ Gimbal', 'gimbal-test'),
-        ])
-        if task is None:
-            return None
-        if task in ('explore-detect', 'fire-test'):
-            mode = choose('เลือกชนิดการยิงเป้าหมาย', [
-                ('ยิงกระสุนน้ำ', 'water_fire'),
-                ('ยิงอินฟราเรด', 'infared_fire'),
-            ])
-            return (task, {'fire_type': mode}) if mode is not None else None
-        if task == 'detect-camera':
-            camera = choose('เลือกกล้องสำหรับตรวจจับ', [
-                ('กล้องหุ่นยนต์ RoboMaster (AP mode)', 'robot-ap'),
-                ('กล้องหุ่นยนต์ RoboMaster (STA mode)', 'robot-sta'),
-                ('เว็บแคมของคอมพิวเตอร์ (PC Webcam)', 'webcam'),
-            ])
-            return (task, {'mode': camera}) if camera is not None else None
-        if task == 'turn-test':
-            direction = choose('เลือกการเลี้ยว', [
-                ('ขวา 90 องศา', 'right'),
-                ('ซ้าย 90 องศา', 'left'),
-                ('กลับหลัง 180 องศา', 'around'),
-            ])
-            return (task, {'direction': direction}) if direction is not None else None
-        if task == 'motion':
-            commands = input('คำสั่งเคลื่อนที่ เช่น fwd 1, right, fwd 1 (เว้นว่างเพื่อยกเลิก): ').strip()
-            return (task, {'commands': commands}) if commands else None
-        if task == 'calibrate':
-            action = calibration_action()
-            return (task, {'action': action}) if action is not None else None
-        if task == 'analysis':
-            base = Path(project_path('paths.telemetry'))
-            runs = [p for p in base.glob('run*') if p.is_dir() and any(p.glob('*.json'))]
-            runs += list(base.glob('*.json'))
-            runs.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-            if not runs:
-                print('ยังไม่มี Log สำหรับวิเคราะห์ใน {}'.format(base))
-                return None
-            selected = choose('เลือก Log ที่ต้องการวิเคราะห์', [(p.name, str(p)) for p in runs])
-            return (task, {'file': selected}) if selected else None
-        return task, {}
-    except (EOFError, KeyboardInterrupt):
-        print('\nออกจากเมนู')
-        return None
+        log_path = Path(project_path('paths.telemetry')) / ('gui_session_{}.log'.format(
+            time.strftime('%Y%m%d_%H%M%S')))
+        writer = _GuiWriter(self.messages, log_path)
+        previous_handlers = {}
+        def request_stop(_signum, _frame):
+            self.interrupt_requested.set()
+        try:
+            stop_signals = [signal.SIGINT, signal.SIGTERM]
+            if hasattr(signal, 'SIGHUP'):
+                stop_signals.append(signal.SIGHUP)
+            for signum in stop_signals:
+                previous_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, request_stop)
+            sys.stdout = writer
+            sys.stderr = writer
+            self.root.mainloop()
+        finally:
+            sys.stdout, sys.stderr = self.old_stdout, self.old_stderr
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
+            writer.close()
