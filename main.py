@@ -247,8 +247,9 @@ def run_exploration(on_map_ready=None, control=None):
     return 0 if success else 1
 
 
-def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None, control=None):
-    """Explore with SLAM + camera sign detection (captures 3 confirmation images)."""
+def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None,
+                              control=None, fire_type='water_fire', on_frame=None):
+    """Explore with SLAM, detect signs, and fire at each confirmed target."""
     import slam_detect_camera
     slam_detect_camera.clear_previous_captures()
     conn_type = conn_type or setting('robot.conn_type')
@@ -266,9 +267,13 @@ def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None, con
     success = False
     try:
         if mock:
-            success = slam_detect_camera.run_simulation(camera_index=0, output=output_path, control=control)
+            success = slam_detect_camera.run_simulation(
+                camera_index=0, output=output_path, control=control, on_frame=on_frame)
         else:
-            success = slam_detect_camera.run_hardware(conn_type, calib, output_path, control=control)
+            success = slam_detect_camera.run_hardware(
+                conn_type, calib, output_path, control=control, fire_type=fire_type,
+                on_frame=on_frame,
+            )
     except (Exception, KeyboardInterrupt) as exc:
         print(f"[Explore-Detect] Note: {exc}")
     finally:
@@ -281,7 +286,7 @@ def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None, con
     return 0 if success else 1
 
 
-def run_camera_detection(mode: str = 'robot-ap'):
+def run_camera_detection(mode: str = 'robot-ap', control=None, on_frame=None):
     """Live target detection with 3 confirmation snapshots."""
     import detect_camera
     orig_argv = list(sys.argv)
@@ -292,13 +297,30 @@ def run_camera_detection(mode: str = 'robot-ap'):
     else:
         sys.argv = ['detect_camera.py', '--conn-type', 'ap']
     try:
-        detect_camera.main()
+        detect_camera.main(
+            on_frame=on_frame,
+            cancel=control.cancel if control is not None else None,
+        )
         return 0
     except Exception as exc:
         print(f"[Detect-Camera] Error: {exc}")
         return 1
     finally:
         sys.argv = orig_argv
+
+
+def run_fire_test(conn_type=None, fire_type='water_fire', control=None, on_frame=None):
+    """Use only the camera, Gimbal, and blaster while the chassis stays still."""
+    from src.fire_test import run_stationary_fire
+
+    cancel = control.cancel if control is not None else None
+    run_stationary_fire(
+        conn_type=conn_type or setting('robot.conn_type'),
+        fire_type=fire_type,
+        cancel=cancel,
+        on_frame=on_frame,
+    )
+    return 1 if cancel is not None and cancel.is_set() else 0
 
 
 def run_menu():
@@ -311,6 +333,7 @@ def run_menu():
         'explore': run_exploration,
         'explore-detect': run_exploration_detection,
         'detect-camera': run_camera_detection,
+        'fire-test': run_fire_test,
         'step-test': test_step,
         'turn-test': test_turn,
         'monitor': monitor_sensors,
@@ -336,9 +359,19 @@ def run_selected(task, parameters, gui, control):
             conn_type=parameters.get('conn_type', setting('robot.conn_type')),
             mock=parameters.get('mock', False),
             on_map_ready=gui.show_map,
-            control=control
+            control=control,
+            fire_type=parameters.get('fire_type', 'water_fire'),
+            on_frame=gui.show_fire_frame,
         ),
-        'detect-camera': lambda: run_camera_detection(parameters.get('mode', 'robot-ap')),
+        'detect-camera': lambda: run_camera_detection(
+            parameters.get('mode', 'robot-ap'), control=control,
+            on_frame=gui.show_fire_frame),
+        'fire-test': lambda: run_fire_test(
+            conn_type=parameters.get('conn_type', setting('robot.conn_type')),
+            fire_type=parameters.get('fire_type', 'water_fire'),
+            control=control,
+            on_frame=gui.show_fire_frame,
+        ),
         'step-test': lambda: test_step(control=control),
         'turn-test': lambda: test_turn(parameters.get('direction', 'right'), control=control),
         'monitor': lambda: monitor_sensors(control=control),
@@ -355,7 +388,7 @@ def run_selected(task, parameters, gui, control):
 def main():
     import argparse
     parser = argparse.ArgumentParser(
-        description="RoboMaster EP - ระบบสำรวจ Grid SLAM และตรวจจับเป้าหมาย (Auto Capture 3 รูป)"
+        description="RoboMaster EP - สำรวจ Grid SLAM และเล็งยิงทุกเป้าหมาย"
     )
     parser.add_argument(
         "--cli", action="store_true",
@@ -374,12 +407,20 @@ def main():
         help="โหมดการเชื่อมต่อหุ่นยนต์ (ap หรือ sta, ค่าเริ่มต้น: ap)",
     )
     parser.add_argument(
+        "--fire-type", choices=("water_fire", "infared_fire", "infrared_fire"),
+        default="water_fire", help="ชนิดการยิงเมื่อพบเป้า (ค่าเริ่มต้น: water_fire)",
+    )
+    parser.add_argument(
         "--mock", action="store_true",
         help="รันโหมดจำลอง (Simulator)",
     )
     parser.add_argument(
         "--step", action="store_true",
         help="ทดสอบเดินหน้า 1 ช่อง (เคลื่อนที่อย่างเดียว ไม่ใช้กล้อง)",
+    )
+    parser.add_argument(
+        "--fire-test", action="store_true",
+        help="ทดสอบกล้อง เล็ง Gimbal และยิงเป้า โดยไม่ให้หุ่นเดิน",
     )
     parser.add_argument(
         "--turn", choices=("left", "right", "around"), default=None,
@@ -395,6 +436,8 @@ def main():
         # 1. กรณีระบุคำสั่งเจาะจงผ่าน CLI
         if args.menu:
             return run_menu()
+        if args.fire_test:
+            return run_fire_test(conn_type=args.conn_type, fire_type=args.fire_type)
         if args.step:
             return test_step()
         if args.turn:
@@ -404,10 +447,13 @@ def main():
             return run_exploration()
         if args.cli:
             print("=" * 65)
-            print("🚀 เริ่มภารกิจ (CLI Mode): สำรวจ Grid SLAM + ตรวจจับเป้าหมาย (Auto Capture 3 รูป)")
+            print("🚀 เริ่มภารกิจ (CLI Mode): สำรวจ Grid SLAM + เล็งยิงทุกเป้าหมาย")
             print(f"📡 โหมดเชื่อมต่อ: {args.conn_type.upper()}")
+            print(f"🎯 ชนิดการยิง: {args.fire_type}")
             print("=" * 65)
-            return run_exploration_detection(conn_type=args.conn_type, mock=args.mock)
+            return run_exploration_detection(
+                conn_type=args.conn_type, mock=args.mock, fire_type=args.fire_type
+            )
 
         # 2. ค่าเริ่มต้น (Default): เปิดหน้าต่าง GUI ขึ้นมาก่อนเสมอ
         from src.operation_menu import OperationGUI
@@ -417,11 +463,15 @@ def main():
         # ถ้าผู้ใช้กดปุ่ม 'ปิด GUI แล้วเริ่มสำรวจทันที' จากในหน้าต่าง GUI
         if getattr(gui, 'proceed_to_explore', False):
             conn_type = getattr(gui, 'selected_conn_type', args.conn_type)
+            fire_type = getattr(gui, 'selected_fire_type', args.fire_type)
             print("=" * 65)
-            print("🚀 เริ่มภารกิจ: สำรวจ Grid SLAM + ตรวจจับเป้าหมาย (Auto Capture 3 รูป)")
+            print("🚀 เริ่มภารกิจ: สำรวจ Grid SLAM + เล็งยิงทุกเป้าหมาย")
             print(f"📡 โหมดเชื่อมต่อ: {conn_type.upper()}")
+            print(f"🎯 ชนิดการยิง: {fire_type}")
             print("=" * 65)
-            return run_exploration_detection(conn_type=conn_type, mock=args.mock)
+            return run_exploration_detection(
+                conn_type=conn_type, mock=args.mock, fire_type=fire_type
+            )
 
         return 0
 

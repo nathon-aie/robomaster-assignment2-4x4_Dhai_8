@@ -1,4 +1,5 @@
 """Interactive operation selection and live GUI for RoboMaster EP."""
+import base64
 import json
 import queue
 import sys
@@ -53,6 +54,11 @@ class OperationGUI:
         self.map_data = None
         self.proceed_to_explore = False
         self.selected_conn_type = 'ap'
+        self.selected_fire_type = 'water_fire'
+        self.fire_preview_window = None
+        self.fire_preview_label = None
+        self.fire_preview_frame = None
+        self.fire_preview_lock = threading.Lock()
         self.old_stdout, self.old_stderr = sys.stdout, sys.stderr
         self._build()
         self.root.protocol('WM_DELETE_WINDOW', self._close)
@@ -89,16 +95,23 @@ class OperationGUI:
         self.conn_mode.current(0 if setting('robot.conn_type') == 'ap' else 1)
         self.conn_mode.pack(fill='x', pady=(0, 8))
 
+        ttk.Label(mission_box, text='ชนิดการยิงเป้าหมาย:').pack(anchor='w', pady=(0, 2))
+        self.fire_mode = ttk.Combobox(
+            mission_box, state='readonly', values=('water_fire', 'infared_fire')
+        )
+        self.fire_mode.current(0)
+        self.fire_mode.pack(fill='x', pady=(0, 8))
+
         self.start_explore_btn = ttk.Button(
             mission_box,
-            text='🚀 เริ่มสำรวจ + ตรวจจับเป้าหมาย (Auto 3 รูป)',
+            text='🚀 เริ่มสำรวจ + เล็งยิงทุกเป้าหมาย',
             command=lambda: self._select('explore-detect')
         )
         self.start_explore_btn.pack(fill='x', ipady=4, pady=(0, 4))
 
         self.direct_explore_btn = ttk.Button(
             mission_box,
-            text='🚪 ปิด GUI แล้วเริ่มสำรวจทันที',
+            text='🚪 ปิด GUI แล้วเริ่มสำรวจและยิง',
             command=self._proceed_headless
         )
         self.direct_explore_btn.pack(fill='x', pady=(0, 2))
@@ -110,6 +123,7 @@ class OperationGUI:
         self.task_buttons = [self.start_explore_btn]
         for label, task in [
             ('🎯 ตรวจจับเป้าหมายจากกล้องสด (ทดสอบกล้อง)', 'detect-camera'),
+            ('💧 ทดสอบเล็งและยิง (หุ่นไม่เดิน)', 'fire-test'),
             ('🗺️ สำรวจ SLAM (เฉพาะเดิน ไม่ใช้กล้อง)', 'explore'),
             ('👣 ทดสอบเดินหน้า 1 ช่อง', 'step-test'),
             ('🔄 ทดสอบเลี้ยว', 'turn-test'),
@@ -164,6 +178,7 @@ class OperationGUI:
     def _proceed_headless(self):
         """Close GUI and tell main() to run exploration on the main thread."""
         self.selected_conn_type = 'ap' if self.conn_mode.current() == 0 else 'sta'
+        self.selected_fire_type = self.fire_mode.get()
         self.proceed_to_explore = True
         self._close()
 
@@ -171,6 +186,10 @@ class OperationGUI:
         params = {}
         if task == 'explore-detect':
             params['conn_type'] = 'ap' if self.conn_mode.current() == 0 else 'sta'
+            params['fire_type'] = self.fire_mode.get()
+        elif task == 'fire-test':
+            params['conn_type'] = 'ap' if self.conn_mode.current() == 0 else 'sta'
+            params['fire_type'] = self.fire_mode.get()
         elif task == 'detect-camera':
             params['mode'] = 'robot-ap' if self.conn_mode.current() == 0 else 'robot-sta'
         elif task == 'turn-test':
@@ -192,6 +211,8 @@ class OperationGUI:
             params['file'] = path
 
         self.control = RunControl()
+        if task in ('fire-test', 'explore-detect', 'detect-camera'):
+            self._open_fire_preview(task)
         self.status.set('กำลังทำงาน: ' + task)
         for button in self.task_buttons:
             button.configure(state='disabled')
@@ -211,6 +232,31 @@ class OperationGUI:
         if self.control is not None:
             self.status.set('กำลังหยุดงาน...')
             self.control.stop()
+
+    def _open_fire_preview(self, task):
+        window = tk.Toplevel(self.root)
+        window.title('RoboMaster — ภาพกล้อง ({})'.format(task))
+        window.protocol('WM_DELETE_WINDOW', self._stop_fire_preview)
+        self.fire_preview_window = window
+        self.fire_preview_label = ttk.Label(window, text='กำลังรอภาพจากกล้อง...')
+        self.fire_preview_label.pack(padx=8, pady=8)
+
+    def _stop_fire_preview(self):
+        self._stop()
+        self._close_fire_preview()
+
+    def _close_fire_preview(self):
+        if self.fire_preview_window is not None:
+            self.fire_preview_window.destroy()
+            self.fire_preview_window = None
+            self.fire_preview_label = None
+        with self.fire_preview_lock:
+            self.fire_preview_frame = None
+
+    def show_fire_frame(self, frame):
+        """Accept a camera frame from the robot worker; Tk renders it on its own thread."""
+        with self.fire_preview_lock:
+            self.fire_preview_frame = frame
 
     def show_map(self, path):
         self.messages.put(('map', str(path)))
@@ -246,6 +292,8 @@ class OperationGUI:
                     ready.set()
                 elif message[0] == 'done':
                     _, task, result = message
+                    if task in ('fire-test', 'explore-detect', 'detect-camera'):
+                        self._close_fire_preview()
                     self.status.set('{}: {}'.format(task, 'เสร็จสมบูรณ์' if result == 0 else 'หยุด/ไม่สำเร็จ'))
                     self.stop_button.configure(state='disabled')
                     for button in self.task_buttons:
@@ -253,6 +301,21 @@ class OperationGUI:
                     self.control = None
         except queue.Empty:
             pass
+        if self.fire_preview_label is not None:
+            with self.fire_preview_lock:
+                frame = self.fire_preview_frame
+                self.fire_preview_frame = None
+            if frame is not None:
+                import cv2
+                height, width = frame.shape[:2]
+                if width > 1050:
+                    frame = cv2.resize(frame, (1050, round(height * 1050 / width)))
+                encoded, png = cv2.imencode('.png', frame)
+                if encoded:
+                    photo = tk.PhotoImage(
+                        data=base64.b64encode(png.tobytes()).decode('ascii'), format='png')
+                    self.fire_preview_label.configure(image=photo, text='')
+                    self.fire_preview_label.image = photo
         self.root.after(100, self._poll)
 
     def _refresh_map(self):
@@ -391,8 +454,9 @@ def select_operation():
     try:
         task = choose('RoboMaster EP — เลือกงาน (ค่าพื้นฐานอ่านจาก config/settings.yaml)', [
             ('สำรวจและสร้างแผนที่ SLAM + DFS', 'explore'),
-            ('สำรวจ SLAM + ตรวจจับเป้าหมาย (Auto Capture 3 รูป)', 'explore-detect'),
+            ('สำรวจ SLAM + เล็งยิงทุกเป้าหมาย', 'explore-detect'),
             ('ทดสอบตรวจจับเป้าหมายจากกล้อง (Auto Capture 3 รูป)', 'detect-camera'),
+            ('ทดสอบเล็งและยิงเป้า (หุ่นไม่เดิน)', 'fire-test'),
             ('ทดสอบเดินหน้า 1 ช่อง', 'step-test'),
             ('ทดสอบเลี้ยว', 'turn-test'),
             ('ดูข้อมูลเซนเซอร์สด', 'monitor'),
@@ -403,7 +467,13 @@ def select_operation():
         ])
         if task is None:
             return None
-        if task in ('gimbal-test', 'explore-detect'):
+        if task in ('explore-detect', 'fire-test'):
+            mode = choose('เลือกชนิดการยิงเป้าหมาย', [
+                ('ยิงกระสุนน้ำ', 'water_fire'),
+                ('ยิงอินฟราเรด', 'infared_fire'),
+            ])
+            return (task, {'fire_type': mode}) if mode is not None else None
+        if task == 'gimbal-test':
             return task, {}
         if task == 'detect-camera':
             cam_choice = choose('เลือกกล้องสำหรับตรวจจับ', [

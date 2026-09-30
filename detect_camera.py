@@ -477,7 +477,6 @@ def detect_signs(frame, debug=False):
         })
 
     detections = filter_size_outliers(detections)
-
     for detection in detections:
         color_name = detection["color"]
         shape_name = detection["shape"]
@@ -496,6 +495,16 @@ def detect_signs(frame, debug=False):
         )
 
     cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, overlay)
+
+    # Camera aim point and each detected target centre are drawn after the
+    # contour blend so the yaw offset remains easy to see in the live view.
+    camera_center = (frame_w // 2, frame_h // 2)
+    cv2.drawMarker(overlay, camera_center, (0, 255, 255),
+                   cv2.MARKER_CROSS, 24, 2, cv2.LINE_AA)
+    for detection in detections:
+        target_center = detection["center"]
+        cv2.circle(overlay, target_center, 7, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.circle(overlay, target_center, 2, (0, 0, 255), -1, cv2.LINE_AA)
 
     if debug:
         cv2.imshow("Debug Saliency Mask", candidate_mask)
@@ -538,7 +547,7 @@ def clear_previous_captures(capture_dir=None):
     return deleted_count
 
 
-def main():
+def main(on_frame=None, cancel=None):
     parser = argparse.ArgumentParser(description="Adaptive RoboMaster Sign Detector")
     parser.add_argument("--conn-type", choices=("ap", "sta"), default="ap",
                         help="RoboMaster connection type (default: ap)")
@@ -583,10 +592,12 @@ def main():
         if not cap.isOpened():
             print("Error: Could not open webcam index {}".format(args.camera_index))
             return
-        print("Webcam detection started on index {}. Press 'q' to quit.".format(args.camera_index))
+        print("Webcam detection started on index {}. {}".format(
+            args.camera_index,
+            "Use the GUI Stop button to quit." if on_frame is not None else "Press 'q' to quit."))
         print("Auto-snapshot: Will save 3 confirmation photos into '{}' when target is detected.".format(capture_dir))
         try:
-            while True:
+            while cancel is None or not cancel.is_set():
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     continue
@@ -603,13 +614,17 @@ def main():
                         snaps.append(filename)
                         print("[Snapshot {}/3] Saved confirmation photo: {}".format(idx, filename))
 
-                combined = build_side_by_side_view(result, mask_view)
-                cv2.imshow("RoboMaster - Camera & Sign Mask", combined)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
+                if on_frame is not None:
+                    on_frame(build_side_by_side_view(result, mask_view))
+                else:
+                    combined = build_side_by_side_view(result, mask_view)
+                    cv2.imshow("RoboMaster - Camera & Sign Mask", combined)
+                if on_frame is None and cv2.waitKey(1) & 0xFF == ord("q"):
                     break
         finally:
             cap.release()
-            cv2.destroyAllWindows()
+            if on_frame is None:
+                cv2.destroyAllWindows()
         return
 
     # Mode 3: RoboMaster Robot Camera
@@ -630,11 +645,12 @@ def main():
         ep_camera = ep_robot.camera
         ep_camera.start_video_stream(display=False)
         stream_started = True
-        print("Robot camera detection started. Press 'q' to quit.")
+        print("Robot camera detection started. {}".format(
+            "Use the GUI Stop button to quit." if on_frame is not None else "Press 'q' to quit."))
         print("Auto-snapshot: Will save 3 confirmation photos into '{}' when target is detected.".format(capture_dir))
 
         previous_signs = None
-        while True:
+        while cancel is None or not cancel.is_set():
             frame = ep_camera.read_cv2_image(strategy="newest", timeout=0.5)
             if frame is not None:
                 result, mask_view, detections = detect_signs(frame, debug=args.debug)
@@ -663,15 +679,19 @@ def main():
                         print("No recognized signs in view.")
                     previous_signs = signs
 
-                combined = build_side_by_side_view(result, mask_view)
-                cv2.imshow("RoboMaster - Camera & Sign Mask", combined)
+                if on_frame is not None:
+                    on_frame(build_side_by_side_view(result, mask_view))
+                else:
+                    combined = build_side_by_side_view(result, mask_view)
+                    cv2.imshow("RoboMaster - Camera & Sign Mask", combined)
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            if on_frame is None and cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     except Exception as error:
         print("Error: {}".format(error))
     finally:
-        cv2.destroyAllWindows()
+        if on_frame is None:
+            cv2.destroyAllWindows()
         if stream_started:
             ep_camera.stop_video_stream()
         ep_robot.close()

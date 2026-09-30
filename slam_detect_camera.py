@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import statistics
 import threading
 import time
 import traceback
@@ -15,10 +16,12 @@ try:
     from src.grid_slam import DIRECTIONS, NAMES, DFSExplorer, wrap
     from src.settings import get as setting
     from src.settings import project_path
+    from src.target_fire import TargetFireController
 except ImportError:
     from SLAM.src.grid_slam import DIRECTIONS, NAMES, DFSExplorer, wrap
     from SLAM.src.settings import get as setting
     from SLAM.src.settings import project_path
+    from SLAM.src.target_fire import TargetFireController
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -101,7 +104,7 @@ def front_wall_distance(slam, direction, distance_m, sensor_heading=None):
     return distance_mm
 
 
-def inspect_walls_during_scan(explorer, inspection, lock, finished):
+def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None):
     backend = explorer.backend
     original_scan = backend.scan
     robot = backend.robot
@@ -129,11 +132,11 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
             return scan_result
 
         yaw_for_relative_direction = {0: 0, 1: 90, 2: -180, 3: -90}
+        pending_targets = {}
         for direction, sensor_heading, distance_mm in walls:
             relative_direction = (direction - heading) % 4
             camera_yaw = yaw_for_relative_direction[relative_direction]
             sweep_yaws = []
-            finished.clear()
             with lock:
                 inspection.update({
                     "active": False,
@@ -141,6 +144,8 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
                     "direction": direction,
                     "frame_count": 0,
                     "detected_frames": 0,
+                    "targets": [],
+                    "phase": "idle",
                 })
             try:
                 # 1. หมุนแนวนอน (Yaw) ไปที่กำแพงด้านนั้นก่อนในระดับสายตาปกติ
@@ -179,6 +184,7 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
                         "tof_distance_mm": distance_mm,
                         "frame_count": 0,
                         "detected_frames": 0,
+                        "targets": [],
                     })
 
                 sweep_yaws = [
@@ -216,6 +222,8 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
                             inspection["direction"] = direction
                             inspection["tof_distance_mm"] = distance_mm
                             inspection["camera_yaw"] = sweep_yaw
+                            inspection["camera_pitch"] = SIGN_LOOK_DOWN_PITCH_DEG
+                            inspection["phase"] = "survey"
                             inspection["active"] = True
                         dwell_deadline = time.monotonic() + dwell_per_yaw
                         while time.monotonic() < dwell_deadline:
@@ -232,6 +240,11 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
                     inspection["active"] = False
                     inspected_frames = inspection.get("frame_count", 0)
                     detected_frames = inspection.get("detected_frames", 0)
+                    confirmed_targets = [dict(target) for target in inspection.get("targets", [])
+                                         if target["confirmed"]]
+                for target in confirmed_targets:
+                    key = (direction, target["color"], target["shape"])
+                    pending_targets.setdefault(key, []).append(target)
                 if hasattr(explorer.slam, "events"):
                     explorer.slam.events.append({
                         "timestamp": time.time(), "type": "sign_inspection",
@@ -252,8 +265,42 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished):
                     pitch_up_action.wait_for_completed(
                         timeout=setting("gimbal.action_timeout_sec")
                     )
+                    with lock:
+                        inspection["camera_yaw"] = camera_yaw
+                        inspection["camera_pitch"] = setting("gimbal.pitch_deg")
                 except Exception as error:
                     print("Gimbal pitch-up warning: {}".format(error))
+
+        # Finish every wall sweep before moving the Gimbal to shoot. The map
+        # also identifies a sign by cell, direction, color and shape, so use
+        # that same identity to avoid another burst at the same sign.
+        if shooter is not None and not finished.is_set():
+            targets_to_fire = []
+            for (direction, color, shape), sightings in pending_targets.items():
+                targets_to_fire.append({
+                    "direction": direction, "color": color, "shape": shape,
+                    "yaw": statistics.median(item["yaw"] for item in sightings),
+                    "pitch": statistics.median(item["pitch"] for item in sightings),
+                    "confirmed": True,
+                })
+            with lock:
+                inspection.update(active=False, phase="idle", targets=targets_to_fire)
+            explorer.slam.events.append({
+                "timestamp": time.time(), "type": "target_scan_complete",
+                "cell": list(explorer.slam.cell),
+                "targets": [
+                    {"direction": target["direction"], "color": target["color"],
+                     "shape": target["shape"], "yaw": round(target["yaw"], 2),
+                     "pitch": round(target["pitch"], 2)}
+                    for target in targets_to_fire
+                ],
+            })
+            print("[Target fire] Scan complete: {} distinct sign(s) to fire at.".format(
+                len(targets_to_fire)))
+            try:
+                shooter.fire_confirmed(tuple(explorer.slam.cell), heading)
+            except Exception as error:
+                print("[Target fire] Warning: {}".format(error))
 
         # ตรวจครบทุกด้านแล้ว หมุนกลับมาหน้าตรง
         try:
@@ -471,7 +518,8 @@ def clear_previous_captures(dirs=None):
     return deleted_count
 
 
-def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control=None):
+def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
+                    control=None, fire_type="water_fire", on_frame=None):
     outcome = {"completed": False, "error": None}
     sign_marks = {}
     confirmation_streaks = {}
@@ -484,10 +532,22 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
     clear_previous_captures([captured_signs_dir])
     captured_snapshots = {}
 
+    shooter = None
     if camera_is_robot:
-        inspect_walls_during_scan(
-            explorer, inspection, inspection_lock, inspection_finished
-        )
+        robot = getattr(getattr(explorer, "backend", None), "robot", None)
+        if robot is not None and getattr(robot, "blaster", None) is not None:
+            shooter = TargetFireController(
+                robot, inspection, inspection_lock, inspection_finished,
+                fire_type, explorer.slam.events,
+                pose_provider=explorer.backend.hub.get_latest_state,
+            )
+            inspect_walls_during_scan(
+                explorer, inspection, inspection_lock, inspection_finished, shooter
+            )
+        else:
+            inspect_walls_during_scan(
+                explorer, inspection, inspection_lock, inspection_finished
+            )
 
     def explore():
         try:
@@ -501,7 +561,9 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
     window_created = False
 
     try:
-        print("Camera is live. Press 'q' to stop/close the mission window.")
+        print("Camera is live. {}".format(
+            "Use the GUI Stop button or close its camera window."
+            if on_frame is not None else "Press 'q' to stop/close the mission window."))
         while True:
             if camera_is_robot:
                 frame = camera.read_cv2_image(strategy="newest", timeout=0.5)
@@ -521,7 +583,10 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                         if inspection["active"]:
                             active_inspection = dict(inspection)
                     if active_inspection is not None:
-                        valid_wall_distance = active_inspection["tof_distance_mm"]
+                        if shooter is not None:
+                            shooter.observe(detections, frame.shape)
+                        if active_inspection.get("phase") == "survey":
+                            valid_wall_distance = active_inspection["tof_distance_mm"]
 
                 current_cell = (
                     active_inspection["cell"] if active_inspection is not None
@@ -534,9 +599,9 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
 
                 valid_candidates = set()
                 if valid_wall_distance is not None:
-                    # เลือกการตรวจจับที่มีค่า Confidence สูงที่สุดเพื่อไม่ให้เกิดการแคปเบิ้ล 2 คลาสบนกำแพงเดียวกัน
+                    # เก็บและตรวจทุกเป้าที่กล้องเห็นใน Cell นี้
                     sorted_dets = sorted(detections, key=lambda d: d.get("confidence", 0.0), reverse=True)
-                    target_detections = sorted_dets[:1] if sorted_dets else []
+                    target_detections = sorted_dets
                     for detection in target_detections:
                         key = (current_cell, current_direction,
                                detection["color"], detection["shape"])
@@ -567,6 +632,8 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                                 print("[Snapshot] Warning saving photo {}: {}".format(img_name, write_err))
 
                         if streak >= SIGN_CONFIRMATION_FRAMES:
+                            if shooter is not None:
+                                shooter.confirm_detection(detection)
                             mark = sign_marks.get(key)
                             if mark is None:
                                 mark = {
@@ -608,15 +675,18 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                     "WALL VERIFIED - LOOKING DOWN: sign {}/{} frames | marked {}"
                     .format(max(confirmation_streaks.values(), default=0),
                             SIGN_CONFIRMATION_FRAMES, len(sign_marks))
-                    if active_inspection is not None
+                    if valid_wall_distance is not None
                     else "WAITING FOR FRONT WALL SCAN - signs are not marked"
                 )
                 cv2.putText(result, gate_text, (12, 28), cv2.FONT_HERSHEY_SIMPLEX,
                             0.55, (0, 255, 255), 2, cv2.LINE_AA)
-                combined = build_side_by_side_view(result, mask)
-                cv2.imshow("RoboMaster - Camera & Sign Mask", combined)
-                window_created = True
-                if detections:
+                if on_frame is not None:
+                    on_frame(build_side_by_side_view(result, mask))
+                else:
+                    combined = build_side_by_side_view(result, mask)
+                    cv2.imshow("RoboMaster - Camera & Sign Mask", combined)
+                    window_created = True
+                if detections and on_frame is None:
                     labels = sorted(set(
                         "{} {}".format(item["color"], item["shape"])
                         for item in detections
@@ -634,7 +704,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
                 announced = True
 
             # Let OpenCV create/update the window before checking whether it was closed.
-            key = cv2.waitKey(1) & 0xFF
+            key = cv2.waitKey(1) & 0xFF if on_frame is None else -1
             # Check if user closed the OpenCV window via the [X] title-bar button
             try:
                 if window_created and cv2.getWindowProperty("RoboMaster - Camera & Sign Mask", cv2.WND_PROP_VISIBLE) < 1:
@@ -673,7 +743,8 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
         if worker.is_alive() and stop_motion is not None:
             stop_motion()
         worker.join()
-        cv2.destroyAllWindows()
+        if on_frame is None:
+            cv2.destroyAllWindows()
         if explorer.error:
             print("[SLAM Error] {}".format(explorer.error))
         if camera_is_robot:
@@ -686,7 +757,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None, control
     return outcome["completed"]
 
 
-def run_simulation(camera_index, output, control=None):
+def run_simulation(camera_index, output, control=None, on_frame=None):
     from SLAM.src.slam_simulation import SimulationBackend
 
     camera = cv2.VideoCapture(camera_index)
@@ -696,12 +767,14 @@ def run_simulation(camera_index, output, control=None):
 
     explorer = DFSExplorer(SimulationBackend(), output)
     try:
-        return run_camera_loop(explorer, camera, camera_is_robot=False, control=control)
+        return run_camera_loop(explorer, camera, camera_is_robot=False,
+                               control=control, on_frame=on_frame)
     finally:
         camera.release()
 
 
-def run_hardware(conn_type, calibration_path, output, control=None):
+def run_hardware(conn_type, calibration_path, output, control=None,
+                 fire_type="water_fire", on_frame=None):
     try:
         from src.robot_system import RobotSystem
         from src.slam_hardware import HardwareBackend
@@ -744,7 +817,8 @@ def run_hardware(conn_type, calibration_path, output, control=None):
         explorer = DFSExplorer(HardwareBackend(system), output)
         stop_motion = system.thread_2_controller.stop_running
         return run_camera_loop(
-            explorer, camera, camera_is_robot=True, stop_motion=stop_motion, control=control
+            explorer, camera, camera_is_robot=True, stop_motion=stop_motion,
+            control=control, fire_type=fire_type, on_frame=on_frame
         )
     finally:
         if system.thread_2_controller is not None:
@@ -769,6 +843,8 @@ def main():
                         help="PC webcam index used with --mock")
     parser.add_argument("--conn-type", choices=("ap", "sta"),
                         default=setting("robot.conn_type"))
+    parser.add_argument("--fire-type", choices=("water_fire", "infared_fire", "infrared_fire"),
+                        default="water_fire", help="Blaster mode for every confirmed target")
     parser.add_argument("--calibration", default=project_path("paths.calibration"))
     parser.add_argument("--output-dir", default=str(PROJECT_ROOT / "mission_maps"),
                         help="Folder for timestamped mission results (outside SLAM)")
@@ -803,7 +879,8 @@ def main():
         if args.mock:
             success = run_simulation(args.camera_index, output_path)
         else:
-            success = run_hardware(args.conn_type, calibration_path, output_path)
+            success = run_hardware(args.conn_type, calibration_path, output_path,
+                                   fire_type=args.fire_type)
         image_path = render_map_image(output_path)
         print("Map image saved to: {}".format(image_path))
         return 0 if success else 1

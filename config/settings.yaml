@@ -89,6 +89,22 @@ gimbal:
   pivot_x_m: 0.0
   pivot_y_m: 0.0
   beam_offset_m: 0.0
+
+fire:
+  # Look down while searching and keep the Gimbal tilted down when firing.
+  scan_pitch_deg: -20
+  # The SDK acknowledges a burst before all three shots have left the blaster.
+  # Hold the Gimbal still this long before aiming at another target.
+  burst_hold_sec: 1.0
+  max_shot_pitch_deg: -5
+  # Approximate camera FOV; feedback from new frames corrects the final aim.
+  horizontal_fov_deg: 112
+  vertical_fov_deg: 80
+  # Horizontal fraction of image width accepted around the camera crosshair.
+  center_tolerance_fraction: 0.03
+  # Adjust after observing actual impact points, especially for water shots.
+  yaw_bias_deg: 0.0
+  pitch_bias_deg: 0.0
 # พิกัดช่อง (row, column): แถวเพิ่มขึ้นด้านบน คอลัมน์เพิ่มไปทางขวา; ไม่ใช่เมตร
 # ขนาดและจุดเริ่มไม่กำหนดว่ามีกำแพงที่ใด กำแพงยังต้องสำรวจจาก ToF
 
