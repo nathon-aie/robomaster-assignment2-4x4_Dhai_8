@@ -17,11 +17,13 @@ try:
     from src.settings import get as setting
     from src.settings import project_path
     from src.target_fire import TargetFireController
+    from src.slam_report import save_actions_html, save_events_csv
 except ImportError:
     from SLAM.src.grid_slam import DIRECTIONS, NAMES, DFSExplorer, wrap
     from SLAM.src.settings import get as setting
     from SLAM.src.settings import project_path
     from SLAM.src.target_fire import TargetFireController
+    from SLAM.src.slam_report import save_actions_html, save_events_csv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -110,32 +112,23 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
     robot = backend.robot
 
     def scan_with_sign_inspection(*args, **kwargs):
-        scan_result = original_scan(*args, **kwargs)
-        ranges, heading, _ = scan_result
-        scan_headings = getattr(backend, "scan_headings", None) or {}
-        walls = []
-        for direction, distance_m in ranges.items():
-            sensor_heading = scan_headings.get(direction, heading)
+        def inspect_measured_wall(direction, distance_m, sensor_heading, scan_yaw):
             distance_mm = front_wall_distance(
                 explorer.slam, direction, distance_m, sensor_heading
             )
-            if distance_mm is not None:
-                walls.append((direction, sensor_heading, distance_mm))
+            if distance_mm is None:
+                return
+            print("[Sign scan] Nearby {} wall at {:.0f} mm".format(
+                NAMES[direction], distance_mm))
+            state = backend.hub.get_latest_state()
+            if (any(abs(speed) > MAX_STATIONARY_SPEED_MPS
+                    for speed in (state.vel_vx, state.vel_vy, state.vel_vz))
+                    or abs(wrap(state.yaw - wrap(sensor_heading * 90))) > FRONT_VIEW_TOLERANCE_DEG):
+                print("[Sign scan] Skipped: chassis is moving or heading is not aligned")
+                return
 
-        print("[Sign scan] Nearby walls: {}".format(
-            ", ".join(NAMES[direction] for direction, _, _ in walls) or "none"))
-        state = backend.hub.get_latest_state()
-        if (any(abs(speed) > MAX_STATIONARY_SPEED_MPS
-                for speed in (state.vel_vx, state.vel_vy, state.vel_vz))
-                or abs(wrap(state.yaw - wrap(heading * 90))) > FRONT_VIEW_TOLERANCE_DEG):
-            print("[Sign scan] Skipped: chassis is moving or heading is not aligned")
-            return scan_result
-
-        yaw_for_relative_direction = {0: 0, 1: 90, 2: -180, 3: -90}
-        pending_targets = {}
-        for direction, sensor_heading, distance_mm in walls:
-            relative_direction = (direction - heading) % 4
-            camera_yaw = yaw_for_relative_direction[relative_direction]
+            camera_yaw = scan_yaw
+            pending_targets = {}
             sweep_yaws = []
             with lock:
                 inspection.update({
@@ -160,7 +153,7 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
                 )
                 if turn_completed is False or getattr(turn_action, "has_succeeded", True) is False:
                     print("Gimbal horizontal turn failed for {} wall.".format(NAMES[direction]))
-                    continue
+                    return
 
                 # 2. เมื่อถึงแนวกำแพงแล้ว จึงก้มหน้าลงตรวจจับเป้าหมาย
                 action = robot.gimbal.moveto(
@@ -174,7 +167,7 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
                 )
                 if completed is False or getattr(action, "has_succeeded", True) is False:
                     print("Sign look-down action failed for {} wall.".format(NAMES[direction]))
-                    continue
+                    return
 
                 with lock:
                     inspection.update({
@@ -229,6 +222,32 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
                         while time.monotonic() < dwell_deadline:
                             if finished.wait(min(0.02, dwell_deadline - time.monotonic())):
                                 break
+                            if shooter is not None:
+                                with lock:
+                                    confirmed_now = [dict(target) for target in inspection.get("targets", [])
+                                                     if target["confirmed"]]
+                                    if confirmed_now:
+                                        inspection["active"] = False
+                                        inspection["targets"] = []
+                                if confirmed_now:
+                                    for target in confirmed_now:
+                                        target["tof_distance_mm"] = distance_mm
+                                        key = (direction, target["color"], target["shape"])
+                                        pending_targets.setdefault(key, []).append(target)
+                                    with lock:
+                                        inspection["targets"] = [
+                                            dict(target, direction=direction)
+                                            for target in confirmed_now
+                                        ]
+                                    try:
+                                        shooter.fire_confirmed(tuple(explorer.slam.cell), sensor_heading)
+                                    except Exception as error:
+                                        print("[Target fire] Warning: {}".format(error))
+                                    finally:
+                                        with lock:
+                                            inspection["active"] = False
+                                            inspection["targets"] = []
+                                    break
                     except Exception as error:
                         print("Gimbal sweep warning ({} deg): {}".format(
                             sweep_yaw, error
@@ -255,74 +274,55 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
                         "frames": inspected_frames,
                         "detected_frames": detected_frames,
                     })
-                # ตรวจด้านนี้เสร็จแล้ว ให้เงยหน้าขึ้นมาก่อน (Pitch up to level)
-                try:
-                    pitch_up_action = robot.gimbal.moveto(
-                        pitch=setting("gimbal.pitch_deg"),
-                        yaw=camera_yaw,
-                        pitch_speed=setting("gimbal.pitch_speed_dps"),
-                        yaw_speed=setting("gimbal.yaw_speed_dps"),
-                    )
-                    pitch_up_action.wait_for_completed(
-                        timeout=setting("gimbal.action_timeout_sec")
-                    )
+                # Fire confirmed signs on this wall before measuring another side.
+                if shooter is not None and not finished.is_set():
+                    targets_to_fire = []
+                    for (target_direction, color, shape), sightings in pending_targets.items():
+                        targets_to_fire.append({
+                            "direction": target_direction, "color": color, "shape": shape,
+                            "yaw": statistics.median(item["yaw"] for item in sightings),
+                            "pitch": statistics.median(item["pitch"] for item in sightings),
+                            "tof_distance_mm": statistics.median(
+                                item["tof_distance_mm"] for item in sightings),
+                            "confirmed": True,
+                        })
                     with lock:
-                        inspection["camera_yaw"] = camera_yaw
-                        inspection["camera_pitch"] = setting("gimbal.pitch_deg")
-                except Exception as error:
-                    print("Gimbal pitch-up warning: {}".format(error))
+                        inspection.update(active=False, phase="idle", targets=targets_to_fire)
+                    explorer.slam.events.append({
+                        "timestamp": time.time(), "type": "target_scan_complete",
+                        "cell": list(explorer.slam.cell), "direction": NAMES[direction],
+                        "targets": [
+                            {"direction": target["direction"], "color": target["color"],
+                             "shape": target["shape"], "yaw": round(target["yaw"], 2),
+                             "pitch": round(target["pitch"], 2),
+                             "tof_distance_mm": round(target["tof_distance_mm"], 1)}
+                            for target in targets_to_fire
+                        ],
+                    })
+                    if targets_to_fire:
+                        print("[Target fire] {} wall: {} confirmed sign(s).".format(
+                            NAMES[direction], len(targets_to_fire)))
+                        try:
+                            shooter.fire_confirmed(tuple(explorer.slam.cell), sensor_heading)
+                        except Exception as error:
+                            print("[Target fire] Warning: {}".format(error))
 
-        # Finish every wall sweep before moving the Gimbal to shoot. The map
-        # also identifies a sign by cell, direction, color and shape, so use
-        # that same identity to avoid another burst at the same sign.
-        if shooter is not None and not finished.is_set():
-            targets_to_fire = []
-            for (direction, color, shape), sightings in pending_targets.items():
-                targets_to_fire.append({
-                    "direction": direction, "color": color, "shape": shape,
-                    "yaw": statistics.median(item["yaw"] for item in sightings),
-                    "pitch": statistics.median(item["pitch"] for item in sightings),
-                    "tof_distance_mm": statistics.median(
-                        item["tof_distance_mm"] for item in sightings),
-                    "confirmed": True,
-                })
-            with lock:
-                inspection.update(active=False, phase="idle", targets=targets_to_fire)
-            explorer.slam.events.append({
-                "timestamp": time.time(), "type": "target_scan_complete",
-                "cell": list(explorer.slam.cell),
-                "targets": [
-                    {"direction": target["direction"], "color": target["color"],
-                     "shape": target["shape"], "yaw": round(target["yaw"], 2),
-                     "pitch": round(target["pitch"], 2),
-                     "tof_distance_mm": round(target["tof_distance_mm"], 1)}
-                    for target in targets_to_fire
-                ],
-            })
-            print("[Target fire] Scan complete: {} distinct sign(s) to fire at.".format(
-                len(targets_to_fire)))
-            try:
-                shooter.fire_confirmed(tuple(explorer.slam.cell), heading)
-            except Exception as error:
-                print("[Target fire] Warning: {}".format(error))
+                # Resume the scan from the yaw where this wall was measured.
+                restore_action = robot.gimbal.moveto(
+                    pitch=setting("gimbal.pitch_deg"),
+                    yaw=scan_yaw,
+                    pitch_speed=setting("gimbal.pitch_speed_dps"),
+                    yaw_speed=setting("gimbal.yaw_speed_dps"),
+                )
+                restored = restore_action.wait_for_completed(
+                    timeout=setting("gimbal.action_timeout_sec")
+                )
+                if restored is False or getattr(restore_action, "has_succeeded", True) is False:
+                    raise RuntimeError("Could not restore Gimbal after {} wall inspection".format(
+                        NAMES[direction]))
+                backend.commanded_gimbal_yaw = scan_yaw
 
-        # ตรวจครบทุกด้านแล้ว หมุนกลับมาหน้าตรง
-        try:
-            restore_action = robot.gimbal.moveto(
-                pitch=setting("gimbal.pitch_deg"),
-                yaw=0,
-                pitch_speed=setting("gimbal.pitch_speed_dps"),
-                yaw_speed=setting("gimbal.yaw_speed_dps"),
-            )
-            restored = restore_action.wait_for_completed(
-                timeout=setting("gimbal.action_timeout_sec")
-            )
-            if restored is False or getattr(restore_action, "has_succeeded", True) is False:
-                print("Warning: could not restore the configured gimbal pose.")
-        except Exception as error:
-            print("Gimbal restore warning: {}".format(error))
-
-        return scan_result
+        return original_scan(*args, on_measurement=inspect_measured_wall, **kwargs)
 
     backend.scan = scan_with_sign_inspection
 
@@ -339,6 +339,14 @@ def save_sign_marks(output, marks):
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     temp.replace(path)
+
+
+def save_mission_reports(map_file):
+    path = Path(map_file)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    actions = save_actions_html(data, path.parent / "actions.html")
+    events = save_events_csv(data["events"], path.parent / "events.csv")
+    return actions, events
 
 
 def render_map_image(map_file):
@@ -486,39 +494,19 @@ def render_map_image(map_file):
 
 
 def clear_previous_captures(dirs=None):
-    """Deletes old captured target images from previous runs."""
+    """Clear image files only in the current mission's capture directory."""
+    if dirs is None:
+        return 0
+    if isinstance(dirs, (str, Path)):
+        dirs = [dirs]
     deleted_count = 0
-    clean_dirs = []
-    if dirs:
-        if isinstance(dirs, (str, Path)):
-            dirs = [dirs]
-        clean_dirs.extend([Path(d) for d in dirs])
-
-    # Remove legacy root captured_signs folder if present
-    legacy_root = Path("captured_signs")
-    if legacy_root.is_dir():
-        import shutil
-        shutil.rmtree(legacy_root, ignore_errors=True)
-
-    # Search for all existing captured_signs directories in telemetry_logs and mission_maps
-    for parent_folder in ("telemetry_logs", "mission_maps"):
-        p = Path(parent_folder)
-        if p.is_dir():
-            for sub_captures in p.glob("**/captured_signs"):
-                if sub_captures.is_dir() and sub_captures not in clean_dirs:
-                    clean_dirs.append(sub_captures)
-
-    for d in clean_dirs:
-        if d.is_dir():
-            for f in d.glob("*.*"):
-                if f.suffix.lower() in (".jpg", ".jpeg", ".png"):
-                    try:
-                        f.unlink()
-                        deleted_count += 1
-                    except Exception:
-                        pass
-    if deleted_count > 0:
-        print("[Cleanup] ลบภาพที่แคปจากการสำรวจครั้งก่อนหน้าทิ้งแล้ว {} รูป".format(deleted_count))
+    for directory in map(Path, dirs):
+        if not directory.is_dir():
+            continue
+        for image in directory.iterdir():
+            if image.is_file() and image.suffix.lower() in (".jpg", ".jpeg", ".png"):
+                image.unlink()
+                deleted_count += 1
     return deleted_count
 
 
@@ -670,7 +658,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
 
                 if active_inspection is not None:
                     with inspection_lock:
-                        if inspection.get("active"):
+                        if inspection.get("active") and inspection.get("phase") == "survey":
                             inspection["frame_count"] += 1
                             if detections:
                                 inspection["detected_frames"] = inspection.get("detected_frames", 0) + 1
@@ -786,7 +774,10 @@ def run_hardware(conn_type, calibration_path, output, control=None,
         from SLAM.src.robot_system import RobotSystem
         from SLAM.src.slam_hardware import HardwareBackend
 
-    system = RobotSystem(calibration_file=str(calibration_path), conn_type=conn_type)
+    system = RobotSystem(
+        calibration_file=str(calibration_path), conn_type=conn_type,
+        results_dir=Path(output).resolve().parent,
+    )
     if control:
         control.set_system(system)
     camera = None
@@ -886,6 +877,7 @@ def main():
             success = run_hardware(args.conn_type, calibration_path, output_path,
                                    fire_type=args.fire_type)
         image_path = render_map_image(output_path)
+        save_mission_reports(output_path)
         print("Map image saved to: {}".format(image_path))
         return 0 if success else 1
     except (OSError, RuntimeError, ValueError) as error:

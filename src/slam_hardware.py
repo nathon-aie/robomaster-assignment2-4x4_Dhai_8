@@ -269,7 +269,7 @@ class HardwareBackend:
         self.heading = direction
         self.align_heading()
 
-    def scan(self, mode=None):
+    def scan(self, mode=None, on_measurement=None):
         mode = setting('gimbal.scan_mode') if mode is None else mode
         if mode == 'chassis':
             self.controller.stop_chassis()
@@ -301,6 +301,8 @@ class HardwareBackend:
                     self.face(direction)
                     ranges[direction] = self.sample(0, self.aim(0))
                     self.scan_headings[direction] = self.heading
+                    if on_measurement is not None:
+                        on_measurement(direction, ranges[direction], self.heading, 0)
                 self.face(start_heading)
             else:
                 # FREE permits yaw scans while the chassis stays stationary.
@@ -316,10 +318,14 @@ class HardwareBackend:
                     direction = (start_heading + relative) % 4
                     ranges[direction] = self.sample(yaw, self.aim(yaw, direct=(yaw == 90)))
                     self.scan_headings[direction] = start_heading
+                    if on_measurement is not None:
+                        on_measurement(direction, ranges[direction], start_heading, yaw)
                 # Return with the same position action used for the side sweep.
                 # recenter() can remain pending after the gimbal reaches zero.
                 ranges[start_heading] = self.sample(0, self.aim(0, direct=True))
                 self.scan_headings[start_heading] = start_heading
+                if on_measurement is not None:
+                    on_measurement(start_heading, ranges[start_heading], start_heading, 0)
             if mode == 'chassis':
                 self.sample(0, self.aim(0))
             self.ensure_running()

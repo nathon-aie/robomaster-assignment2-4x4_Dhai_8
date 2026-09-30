@@ -13,6 +13,7 @@ except ImportError:
     from sdk_connection import cancel_chassis_speed_timer, initialize_robot, load_robot_sdk
 
 import time
+from pathlib import Path
 from typing import Optional
 
 try:
@@ -34,13 +35,20 @@ class RobotSystem:
         telemetry_dir: str = project_path("paths.telemetry"),
         sensor_rate_hz: float = setting("sensors.rate_hz"),
         conn_type: str = setting("robot.conn_type"),
+        results_dir=None,
     ):
         self.conn_type = conn_type
         self.robot = None
 
         # Core subsystems
         self.calibration_mgr = CalibrationManager(calibration_file)
-        self.telemetry = TelemetryRecorder(output_dir=telemetry_dir)
+        if results_dir is None:
+            self.telemetry = TelemetryRecorder(output_dir=telemetry_dir)
+        else:
+            results_dir = Path(results_dir)
+            self.telemetry = TelemetryRecorder(
+                output_dir=results_dir.parent, run_name=results_dir.name
+            )
         self.sensor_hub = SensorHub(max_history=setting("sensors.history_capacity"))
 
         # Multi-threading workers

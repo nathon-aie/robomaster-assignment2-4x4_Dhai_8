@@ -3,6 +3,7 @@
 import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -251,13 +252,12 @@ def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None,
                               control=None, fire_type='water_fire', on_frame=None):
     """Explore with SLAM, detect signs, and fire at each confirmed target."""
     import slam_detect_camera
-    slam_detect_camera.clear_previous_captures()
     conn_type = conn_type or setting('robot.conn_type')
     calib = Path(project_path('paths.calibration'))
     if not calib.is_absolute():
         calib = Path(__file__).resolve().parent / calib
     mission_dir = Path(project_path('paths.telemetry'))
-    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     output_path = mission_dir / f"run_detect_{timestamp}" / "explored_map.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -283,6 +283,11 @@ def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None,
                 print(f"[Explore-Detect] 🗺️ บันทึกภาพแผนที่สำเร็จ: {map_img}")
             except Exception as e:
                 print(f"[Explore-Detect] Warning: ไม่สามารถเรนเดอร์ภาพแผนที่ได้: {e}")
+    if output_path.exists():
+        try:
+            slam_detect_camera.save_mission_reports(output_path)
+        except Exception as error:
+            print('[Explore-Detect] Report warning: {}'.format(error))
     return 0 if success else 1
 
 

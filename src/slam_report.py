@@ -48,6 +48,12 @@ def action_steps(data):
             elif kind == 'sign_inspection':
                 actions.append('CAMERA {} wall: {} frame(s), detected in {}'.format(
                     e['direction'], e['frames'], e['detected_frames']))
+            elif kind == 'target_fire':
+                outcome = ('{} shot(s) requested'.format(e['shots_requested'])
+                           if e['fire_commands_sent'] else
+                           'skipped ({})'.format(e.get('aim_failure') or 'fire failed'))
+                actions.append('FIRE {} {} on {} wall: {}'.format(
+                    e['color'], e['shape'], NAMES[e['direction']], outcome))
             elif kind == 'walk_start':
                 actions.append('WALK {} | nominal {:.2f} m | Sharp centering + ToF guard'.format(NAMES[e['direction']], e['cell_size_m']))
             elif kind == 'walk_end':
