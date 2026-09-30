@@ -10,7 +10,7 @@ from typing import List
 from src.settings import get as setting, project_path
 from src.robot_system import RobotSystem
 from src.telemetry import TelemetryAnalyzer
-from src.operation_menu import OperationGUI
+from src.operation_menu import OperationGUI, calibration_action, select_operation
 
 
 def parse_custom_commands(cmd_input: str) -> List[str]:
@@ -94,11 +94,7 @@ def test_step(control=None):
                       setting('system.step_test_timeout_sec'), control=control)
 
 
-<<<<<<< HEAD
-def test_turn(direction, control=None):
-=======
 def test_turn(direction='right', control=None):
->>>>>>> stamp
     commands = {'left': 'Turn Left (90 deg)', 'right': 'Turn Right (90 deg)',
                 'around': 'Turn Around (180 deg)'}
     return run_motion([commands[direction]], setting('navigation.base_speed_mps'),
@@ -149,12 +145,6 @@ def calibrate_sensors(action, reference_provider=None, control=None):
         return 0
     session = CalibrationSession(setting('robot.conn_type'))
     try:
-<<<<<<< HEAD
-        session.collect(action, project_path('paths.measurements'), None, None,
-                        setting('sensors.tof_index'), setting('calibration.samples'),
-                        reference_provider=reference_provider)
-        return 1 if control and control.cancel.is_set() else 0
-=======
         if reference_provider or control:
             session.collect(action, project_path('paths.measurements'), None, None,
                             setting('sensors.tof_index'), setting('calibration.samples'),
@@ -170,7 +160,6 @@ def calibrate_sensors(action, reference_provider=None, control=None):
             action = calibration_action()
     except (EOFError, KeyboardInterrupt):
         print('\n[calibration] ออกจากเมนู Calibration')
->>>>>>> stamp
     finally:
         session.close()
 
@@ -209,11 +198,7 @@ def test_gimbal(control=None):
         backend.wait_stationary_pose()
         for cycle in range(cycles):
             if control and control.cancel.is_set():
-<<<<<<< HEAD
-                status = "interrupted"
-=======
                 status = 'interrupted'
->>>>>>> stamp
                 break
             print('[Gimbal test] รอบ {}/{} — สแกน {} ทิศ (Ctrl+C เพื่อหยุด)'.format(
                 cycle + 1, cycles, 4 if cycle == 0 else 3))
@@ -231,11 +216,7 @@ def test_gimbal(control=None):
 
 
 def run_exploration(on_map_ready=None, control=None):
-<<<<<<< HEAD
-    from src.grid_slam import DFSExplorer
-=======
     from src.grid_slam import FrontierExplorer
->>>>>>> stamp
     from src.slam_hardware import HardwareBackend
     system = RobotSystem()
     explorer = None
@@ -280,20 +261,6 @@ def run_exploration(on_map_ready=None, control=None):
     return 0 if success else 1
 
 
-<<<<<<< HEAD
-def run_selected(task, parameters, gui, control):
-    handlers = {
-        'explore': lambda: run_exploration(on_map_ready=gui.show_map, control=control),
-        'step-test': lambda: test_step(control=control),
-        'turn-test': lambda: test_turn(parameters['direction'], control=control),
-        'monitor': lambda: monitor_sensors(control=control),
-        'motion': lambda: run_motion_test(parameters['commands'], control=control),
-        'calibrate': lambda: calibrate_sensors(parameters['action'],
-                                               reference_provider=gui.ask_reference,
-                                               control=control),
-        'analysis': lambda: analyze_log(parameters['file']),
-        'gimbal-test': lambda: test_gimbal(control=control),
-=======
 def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None,
                               control=None, fire_type='water_fire', on_frame=None):
     """Explore with SLAM, detect signs, and fire at each confirmed target."""
@@ -382,17 +349,17 @@ def run_menu():
     task, parameters = selection
     handlers = {
         'explore': run_exploration,
-        'explore-detect': run_exploration_detection,
-        'detect-camera': run_camera_detection,
-        'fire-test': run_fire_test,
+        'explore-detect': lambda: run_exploration_detection(
+            fire_type=parameters['fire_type']),
+        'detect-camera': lambda: run_camera_detection(parameters['mode']),
+        'fire-test': lambda: run_fire_test(fire_type=parameters['fire_type']),
         'step-test': test_step,
-        'turn-test': test_turn,
+        'turn-test': lambda: test_turn(parameters['direction']),
         'monitor': monitor_sensors,
-        'motion': run_motion_test,
-        'calibrate': calibrate_sensors,
-        'analysis': analyze_log,
+        'motion': lambda: run_motion_test(parameters['commands']),
+        'calibrate': lambda: calibrate_sensors(parameters['action']),
+        'analysis': lambda: analyze_log(parameters['file']),
         'gimbal-test': test_gimbal,
->>>>>>> stamp
     }
     return handlers[task]() or 0
 
