@@ -121,10 +121,18 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
             print("[Sign scan] Nearby {} wall at {:.0f} mm".format(
                 NAMES[direction], distance_mm))
             state = backend.hub.get_latest_state()
-            if (any(abs(speed) > MAX_STATIONARY_SPEED_MPS
-                    for speed in (state.vel_vx, state.vel_vy, state.vel_vz))
-                    or abs(wrap(state.yaw - wrap(sensor_heading * 90))) > FRONT_VIEW_TOLERANCE_DEG):
-                print("[Sign scan] Skipped: chassis is moving or heading is not aligned")
+            origin = getattr(backend, "scan_origin", None)
+            position_drift = (math.hypot(state.pos_x - origin[0], state.pos_y - origin[1])
+                              if origin is not None else 0.0)
+            heading_error = abs(wrap(state.yaw - wrap(sensor_heading * 90)))
+            if (heading_error > FRONT_VIEW_TOLERANCE_DEG
+                    or position_drift > setting("scan_guard.max_position_drift_m")):
+                explorer.slam.events.append({
+                    "timestamp": time.time(), "type": "sign_scan_skipped",
+                    "cell": list(explorer.slam.cell), "direction": NAMES[direction],
+                    "position_drift_m": position_drift, "heading_error_deg": heading_error,
+                })
+                print("[Sign scan] Skipped: chassis position or heading drifted")
                 return
 
             camera_yaw = scan_yaw

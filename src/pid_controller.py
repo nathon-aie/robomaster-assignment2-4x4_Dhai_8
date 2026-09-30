@@ -252,10 +252,11 @@ class WallCenteringPID:
         yaw_error = (raw_yaw_diff + 180.0) % 360.0 - 180.0
         vz = self.pid_yaw.compute(yaw_error, dt=dt)
 
-        # Longitudinal speed vx: if front wall detected and close, decelerate
+        # Brake from the configured approach distance. The wall-classification
+        # threshold is for lateral cases and may be only a few mm above the
+        # stop point, which is too late to begin slowing the chassis.
         vx = base_vx
-        has_front, _, _ = self.classify_wall_state(state)
-        if has_front and state.tof_filtered_mm is not None:
+        if state.tof_valid and state.tof_filtered_mm is not None:
             dist_to_stop = state.tof_filtered_mm - self.front_target_mm
             if dist_to_stop <= setting("navigation.front_stop_tolerance_mm"):
                 vx = 0.0  # Reached front wall stop point

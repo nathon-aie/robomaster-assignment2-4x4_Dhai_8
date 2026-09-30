@@ -33,6 +33,10 @@ class BlockedCellError(RuntimeError):
             distance_mm, stop_distance_mm))
 
 
+class ScanHeadingDriftError(RuntimeError):
+    """Chassis yaw changed during a stationary scan; the scan must be repeated."""
+
+
 class GridMap:
     def __init__(self):
         self.edges = {}  # Canonical undirected edge -> wall present/absent.
@@ -281,7 +285,17 @@ class FrontierExplorer:
                     self.slam.events.append({'timestamp': time.time(), 'type': 'scan_skipped',
                                              'cell': list(cell), 'reason': 'previously_scanned'})
                 else:
-                    ranges, heading, yaw = self.backend.scan()
+                    try:
+                        ranges, heading, yaw = self.backend.scan()
+                    except ScanHeadingDriftError:
+                        # Discard the partial scan, restore chassis heading,
+                        # then collect a fresh complete scan at this cell.
+                        self.slam.events.append({'timestamp': time.time(),
+                                                 'type': 'scan_heading_retry',
+                                                 'cell': list(cell)})
+                        self.backend.align_current_heading(
+                            setting('navigation.heading_realign_tolerance_deg'))
+                        ranges, heading, yaw = self.backend.scan()
                     rear = (heading + 2) % 4
                     required = {(heading + r) % 4 for r in (0, 3, 1)}
                     full_scan = set(ranges) == set(range(4))
@@ -338,19 +352,20 @@ class FrontierExplorer:
                     'from': list(cell), 'to': list(target), 'direction': direction,
                     'backtrack': backtrack, 'odometry_delta_m': list(displacement), 'yaw': yaw})
                 self.slam.predict(target, displacement, yaw)
+                self.slam.heading = direction
                 self.moves += 1
-                interval = setting('navigation.face_zero_every_cells')
+                interval = setting('navigation.heading_realign_every_cells')
                 if (interval > 0 and self.moves % interval == 0
                         and hasattr(self.backend, 'face_zero')):
-                    tolerance = setting('navigation.face_zero_tolerance_deg')
+                    tolerance = setting('navigation.heading_realign_tolerance_deg')
                     self.slam.events.append({'timestamp': time.time(),
                                              'type': 'face_zero_start',
                                              'after_moves': self.moves,
+                                             'heading_before': self.slam.heading,
                                              'cell': list(self.slam.cell)})
                     aligned_yaw = self.backend.face_zero(tolerance)
-                    if abs(wrap(aligned_yaw)) > tolerance:
-                        raise RuntimeError('Chassis zero alignment outside tolerance')
-                    self.slam.heading = 0
+                    if abs(wrap(aligned_yaw - self.slam.heading * 90)) > tolerance:
+                        raise RuntimeError('Chassis heading restore outside tolerance')
                     self.slam.pose[2] = aligned_yaw
                     if (self.slam.trajectory
                             and self.slam.trajectory[-1]['cell'] == list(self.slam.cell)):
@@ -359,6 +374,7 @@ class FrontierExplorer:
                                              'type': 'face_zero',
                                              'after_moves': self.moves,
                                              'cell': list(self.slam.cell),
+                                             'heading': self.slam.heading,
                                              'yaw_deg': aligned_yaw,
                                              'tolerance_deg': tolerance})
         except KeyboardInterrupt:
