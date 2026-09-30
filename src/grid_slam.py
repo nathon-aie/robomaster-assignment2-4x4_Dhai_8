@@ -1,4 +1,4 @@
-"""Incremental grid wall mapping, range/odometry localization, and DFS exploration.
+"""Incremental grid wall mapping, range/odometry localization, and frontier exploration.
 
 Cell coordinates: (row, column); rows along initial forward, columns to the right.
 No environment map is supplied to the explorer. Unknown edges are never traversed.
@@ -6,6 +6,7 @@ No environment map is supplied to the explorer. Unknown edges are never traverse
 import json
 import math
 import time
+from collections import deque
 from pathlib import Path
 from .settings import get as setting, map_geometry
 
@@ -20,6 +21,16 @@ def neighbor(cell, direction):
 
 def wrap(deg):
     return (deg + 180) % 360 - 180
+
+
+class BlockedCellError(RuntimeError):
+    """A fresh front range prevents a planned cell move before motion starts."""
+
+    def __init__(self, distance_mm, stop_distance_mm):
+        self.distance_mm = distance_mm
+        self.stop_distance_mm = stop_distance_mm
+        super().__init__('Front obstacle at {:.0f} mm (stop limit {:.0f} mm)'.format(
+            distance_mm, stop_distance_mm))
 
 
 class GridMap:
@@ -199,7 +210,7 @@ and correct the continuous pose; this is not unrestricted metric pose-graph SLAM
     def export(self, output, status, error=None):
         path = Path(output)
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = {'schema': 1, 'method': 'grid_constrained_range_odometry_slam_dfs',
+        data = {'schema': 1, 'method': 'grid_constrained_range_odometry_slam_frontier_bfs',
                 'status': status, 'error': error, 'cell_size_m': setting('navigation.grid_size_m'),
                 'coordinates': 'pose in metres: +x initial forward, +y right; yaw clockwise degrees',
                 'cell_coordinates': '[row, column]; row increases forward, column increases right',
@@ -217,18 +228,47 @@ and correct the continuous pose; this is not unrestricted metric pose-graph SLAM
         temp.replace(path)
 
 
-class DFSExplorer:
-    """DFS exploration through the live scan/move backend."""
+class FrontierExplorer:
+    """Visit the nearest reachable frontier through confirmed open grid edges."""
     def __init__(self, backend, output):
         self.backend = backend
         self.output = output
         self.slam = GridSLAM()
         if hasattr(backend, "event_log"):
             backend.event_log = self.slam.events
-        self.stack = [self.slam.start_cell]
         self.moves = 0
         self.status = 'not_started'
         self.error = None
+
+    def nearest_frontier_route(self):
+        """Return a shortest cell route to an unvisited neighbor, or None.
+
+        BFS only crosses confirmed open edges. Visited cells can be used as
+        transit; an unvisited cell is the terminal frontier, never a shortcut.
+        Direction order breaks ties between routes of equal length.
+        """
+        start = self.slam.cell
+        visited = self.slam.map.visited
+        queue = deque([start])
+        previous = {start: None}
+        while queue:
+            cell = queue.popleft()
+            for direction in setting('slam.direction_order'):
+                target = neighbor(cell, direction)
+                if (not self.slam.contains(target)
+                        or self.slam.map.wall(cell, direction) is not False):
+                    continue
+                if target not in visited:
+                    route = [target]
+                    while cell is not None:
+                        route.append(cell)
+                        cell = previous[cell]
+                    route.reverse()
+                    return route
+                if target not in previous:
+                    previous[target] = cell
+                    queue.append(target)
+        return None
 
     def run(self):
         self.status = 'running'
@@ -251,56 +291,76 @@ class DFSExplorer:
                         raise RuntimeError('Incomplete scan; unknown directions cannot be traversed')
                     self.slam.update(ranges, heading, yaw, getattr(self.backend, "scan_headings", None))
                 self.slam.export(self.output, self.status)
-                # Every visited cell has already had its edges scanned. If no
-                # confirmed open edge leads to an unvisited cell, exploration
-                # is complete here; do not unwind the DFS stack to the start.
-                frontier_exists = any(
-                    self.slam.contains(neighbor(seen, d))
-                    and self.slam.map.wall(seen, d) is False
-                    and neighbor(seen, d) not in self.slam.map.visited
-                    for seen in self.slam.map.visited for d in range(4))
-                if not frontier_exists:
+                # Replan after every arrival. This can use a mapped cross-link
+                # instead of retracing the path by which a cell was discovered.
+                route = self.nearest_frontier_route()
+                if route is None:
+                    frontier_exists = any(
+                        self.slam.contains(neighbor(seen, d))
+                        and self.slam.map.wall(seen, d) is False
+                        and neighbor(seen, d) not in self.slam.map.visited
+                        for seen in self.slam.map.visited for d in range(4))
+                    if frontier_exists:
+                        raise RuntimeError('Mapped frontier is unreachable through confirmed open edges')
                     self.status = 'completed'
                     break
-                choices = [d for d in setting('slam.direction_order')
-                           if self.slam.contains(neighbor(cell, d))
-                           and self.slam.map.wall(cell, d) is False
-                           and neighbor(cell, d) not in self.slam.map.visited]
-                if choices:
-                    if len(self.slam.map.visited) >= setting('slam.max_cells'):
-                        self.status = 'limit_reached'
-                        break
-                    direction = choices[0]
-                    target = neighbor(cell, direction)
-                    backtrack = False
-                elif len(self.stack) > 1:
-                    target = self.stack[-2]
-                    direction = next(d for d in range(4) if neighbor(cell, d) == target)
-                    if self.slam.map.wall(cell, direction) is not False:
-                        raise RuntimeError('Backtracking edge is not confirmed open')
-                    backtrack = True
-                else:
-                    self.status = 'completed'
+                if len(self.slam.map.visited) >= setting('slam.max_cells'):
+                    self.status = 'limit_reached'
                     break
                 if self.moves >= setting('slam.max_moves'):
                     self.status = 'limit_reached'
                     break
-                # Check before issuing any hardware command, including backtracking.
+                target = route[1]
+                direction = next(d for d in range(4) if neighbor(cell, d) == target)
+                backtrack = target in self.slam.map.visited
                 if not self.slam.contains(target):
                     raise RuntimeError('Refusing motion outside configured map bounds')
+                self.slam.events.append({'timestamp': time.time(), 'type': 'frontier_plan',
+                                         'frontier': list(route[-1]),
+                                         'route': [list(step) for step in route]})
                 self.slam.events.append({'timestamp': time.time(), 'type': 'motion_start',
                     'step': self.moves + 1, 'from': list(cell), 'to': list(target),
                     'direction': direction, 'backtrack': backtrack})
-                displacement, yaw = self.backend.move(direction)
+                try:
+                    displacement, yaw = self.backend.move(direction)
+                except BlockedCellError as exc:
+                    edge = self.slam.map.edge(cell, direction)
+                    self.slam.map.edges[edge] = True
+                    self.slam.events.append({
+                        'timestamp': time.time(), 'type': 'front_obstacle',
+                        'cell': list(cell), 'direction': NAMES[direction],
+                        'distance_mm': exc.distance_mm,
+                        'stop_distance_mm': exc.stop_distance_mm,
+                        'action': 'edge_closed_and_replan',
+                    })
+                    continue
                 self.slam.events.append({'timestamp': time.time(), 'type': 'move',
                     'from': list(cell), 'to': list(target), 'direction': direction,
                     'backtrack': backtrack, 'odometry_delta_m': list(displacement), 'yaw': yaw})
                 self.slam.predict(target, displacement, yaw)
-                if backtrack:
-                    self.stack.pop()
-                else:
-                    self.stack.append(target)
                 self.moves += 1
+                interval = setting('navigation.face_zero_every_cells')
+                if (interval > 0 and self.moves % interval == 0
+                        and hasattr(self.backend, 'face_zero')):
+                    tolerance = setting('navigation.face_zero_tolerance_deg')
+                    self.slam.events.append({'timestamp': time.time(),
+                                             'type': 'face_zero_start',
+                                             'after_moves': self.moves,
+                                             'cell': list(self.slam.cell)})
+                    aligned_yaw = self.backend.face_zero(tolerance)
+                    if abs(wrap(aligned_yaw)) > tolerance:
+                        raise RuntimeError('Chassis zero alignment outside tolerance')
+                    self.slam.heading = 0
+                    self.slam.pose[2] = aligned_yaw
+                    if (self.slam.trajectory
+                            and self.slam.trajectory[-1]['cell'] == list(self.slam.cell)):
+                        self.slam.trajectory[-1]['pose'][2] = aligned_yaw
+                    self.slam.events.append({'timestamp': time.time(),
+                                             'type': 'face_zero',
+                                             'after_moves': self.moves,
+                                             'cell': list(self.slam.cell),
+                                             'yaw_deg': aligned_yaw,
+                                             'tolerance_deg': tolerance})
         except KeyboardInterrupt:
             self.status = 'interrupted'
         except Exception as exc:
@@ -314,3 +374,7 @@ class DFSExplorer:
             finally:
                 self.slam.export(self.output, self.status, self.error)
         return self.status == 'completed'
+
+
+# Keep backward-compatible alias so existing imports still work.
+DFSExplorer = FrontierExplorer

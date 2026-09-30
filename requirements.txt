@@ -7,3 +7,6 @@ robomaster @ git+https://github.com/dji-sdk/RoboMaster-SDK.git
 
 # Shared YAML configuration
 PyYAML==6.0.1
+
+# Computer Vision and Camera Detection
+opencv-python==4.11.0.86

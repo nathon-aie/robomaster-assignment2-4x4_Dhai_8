@@ -24,22 +24,26 @@ sensors:
 
 navigation:
   grid_size_m: 0.60
+<<<<<<< HEAD
   base_speed_mps: 0.28
+=======
+  base_speed_mps: 0.40
+>>>>>>> stamp
   step_test_speed_mps: 0.22
   control_rate_hz: 20
   max_heading_error_deg: 15
   max_lateral_deviation_m: 0.15
-  nominal_side_mm: 140
+  nominal_side_mm: 160
   tolerance_mm: 20
-  side_wall_threshold_mm: 260
+  side_wall_threshold_mm: 280
   front_wall_threshold_mm: 350
-  front_target_mm: 180
-  emergency_front_mm: 150
+  front_target_mm: 250
+  emergency_front_mm: 200
   front_stop_tolerance_mm: 20
   # A ToF wall stop after halfway can finish a cell despite odometry drift
   front_wall_arrival_min_fraction: 0.5
-  front_deceleration_mm: 150
-  end_deceleration_m: 0.12
+  front_deceleration_mm: 200
+  end_deceleration_m: 0.20
   minimum_forward_speed_mps: 0.08
   minimum_front_speed_mps: 0.05
   timeout_multiplier: 1.8
@@ -47,13 +51,20 @@ navigation:
   align_duration_sec: 0.3
   align_default_duration_sec: 0.4
   step_pause_sec: 1.0
+<<<<<<< HEAD
   turn_speed_dps: 75
   turn_settle_sec: 0.30
+=======
+  turn_speed_dps: 90
+  turn_settle_sec: 0.30
+  face_zero_every_cells: 2
+  face_zero_tolerance_deg: 5
+>>>>>>> stamp
   duration_sec: 0
 
 pid:
-  lateral: {kp: 0.0010, ki: 0.0001, kd: 0.0010, max_speed: 0.08, integral_limit: 30}
-  yaw: {kp: 1.8, ki: 0.05, kd: 0.15, max_speed: 35, integral_limit: 20}
+  lateral: {kp: 0.0030, ki: 0.0001, kd: 0.0010, max_speed: 0.05, integral_limit: 30}
+  yaw: {kp: 3.0, ki: 0.0, kd: 0.0, max_speed: 90, integral_limit: 20}
 
 telemetry:
   buffer_capacity: 30000
@@ -69,6 +80,7 @@ calibration:
 
 gimbal:
   test_cycles: 2
+  front_yaw_tolerance_deg: 5
   recenter_yaw_speed_dps: 300
   recenter_pitch_speed_dps: 120
   # chassis: turn in place with ToF facing forward; gimbal: requires full yaw range
@@ -86,6 +98,26 @@ gimbal:
   pivot_x_m: 0.0
   pivot_y_m: 0.0
   beam_offset_m: 0.0
+
+fire:
+  # Look down while searching and keep the Gimbal tilted down when firing.
+  scan_pitch_deg: -20
+  # Camera is approximately 4 cm above the barrel. Positive raises the shot.
+  camera_above_barrel_m: 0.04
+  # Used by the stationary fire test when no wall ToF distance is available.
+  default_target_distance_m: 0.25
+  # The SDK acknowledges a burst before all three shots have left the blaster.
+  # Hold the Gimbal still this long before aiming at another target.
+  burst_hold_sec: 1.0
+  max_shot_pitch_deg: -5
+  # Approximate camera FOV; feedback from new frames corrects the final aim.
+  horizontal_fov_deg: 112
+  vertical_fov_deg: 80
+  # Horizontal fraction of image width accepted around the camera crosshair.
+  center_tolerance_fraction: 0.03
+  # Adjust after observing actual impact points, especially for water shots.
+  yaw_bias_deg: 0.0
+  pitch_bias_deg: 0.0
 # พิกัดช่อง (row, column): แถวเพิ่มขึ้นด้านบน คอลัมน์เพิ่มไปทางขวา; ไม่ใช่เมตร
 # ขนาดและจุดเริ่มไม่กำหนดว่ามีกำแพงที่ใด กำแพงยังต้องสำรวจจาก ToF
 

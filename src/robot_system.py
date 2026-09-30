@@ -7,12 +7,13 @@ Thread 2 (Robot Motion Controller), and Telemetry Logging.
 
 try:
     from .settings import get as setting, project_path
-    from .sdk_connection import initialize_robot, load_robot_sdk
+    from .sdk_connection import cancel_chassis_speed_timer, initialize_robot, load_robot_sdk
 except ImportError:
     from settings import get as setting, project_path
-    from sdk_connection import initialize_robot, load_robot_sdk
+    from sdk_connection import cancel_chassis_speed_timer, initialize_robot, load_robot_sdk
 
 import time
+from pathlib import Path
 from typing import Optional
 
 try:
@@ -34,13 +35,20 @@ class RobotSystem:
         telemetry_dir: str = project_path("paths.telemetry"),
         sensor_rate_hz: float = setting("sensors.rate_hz"),
         conn_type: str = setting("robot.conn_type"),
+        results_dir=None,
     ):
         self.conn_type = conn_type
         self.robot = None
 
         # Core subsystems
         self.calibration_mgr = CalibrationManager(calibration_file)
-        self.telemetry = TelemetryRecorder(output_dir=telemetry_dir)
+        if results_dir is None:
+            self.telemetry = TelemetryRecorder(output_dir=telemetry_dir)
+        else:
+            results_dir = Path(results_dir)
+            self.telemetry = TelemetryRecorder(
+                output_dir=results_dir.parent, run_name=results_dir.name
+            )
         self.sensor_hub = SensorHub(max_history=setting("sensors.history_capacity"))
 
         # Multi-threading workers
@@ -126,6 +134,10 @@ class RobotSystem:
             if worker is not None and worker.is_alive():
                 worker.join(timeout=setting("gimbal.action_timeout_sec") + 1)
         if self.robot is not None:
+            try:
+                cancel_chassis_speed_timer(self.robot.chassis)
+            except Exception as exc:
+                print("[RobotSystem] Chassis timer cleanup warning: {}".format(exc))
             try:
                 self.robot.close()
                 print("[RobotSystem] RoboMaster SDK connection closed.")

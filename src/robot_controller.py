@@ -47,6 +47,7 @@ class RobotControllerThread(threading.Thread):
         self.grid_size_m = grid_size_m
         self.base_speed = base_speed
         self.target_heading_deg = 0.0
+        self.yaw_speed_command_sign = setting("robot.yaw_speed_command_sign")
         self.strict_sensors = False
         self.front_ready = False
         self.calibration_manager = None
@@ -80,7 +81,7 @@ class RobotControllerThread(threading.Thread):
         try:
             # RoboMaster EP chassis drive_speed
             # Note: drive_speed accepts x=vx(m/s), y=vy(m/s), z=vz(deg/s)
-            sent = self.robot.chassis.drive_speed(x=vx, y=vy, z=vz * setting("robot.yaw_speed_command_sign"),
+            sent = self.robot.chassis.drive_speed(x=vx, y=vy, z=vz * self.yaw_speed_command_sign,
                                                   timeout=setting("slam.max_sensor_age_sec"))
             if sent is False and not chassis_speed_has_no_ack(self.robot.chassis):
                 raise RuntimeError("Chassis rejected drive command")
@@ -112,6 +113,8 @@ class RobotControllerThread(threading.Thread):
                 raise RuntimeError("Stale sensor stream: {}".format(name))
         if not all(math.isfinite(v) for v in (state.pos_x, state.pos_y, state.yaw, state.gimbal_yaw, state.gimbal_pitch)):
             raise RuntimeError("Non-finite pose or Gimbal angle")
+        if abs(state.gimbal_yaw) > setting("gimbal.front_yaw_tolerance_deg"):
+            raise RuntimeError("Gimbal no longer faces chassis front during motion")
         raw_tof = state.tof_raw
         far_out_of_range = (isinstance(raw_tof, (int, float))
                             and math.isfinite(raw_tof)
@@ -294,7 +297,8 @@ class RobotControllerThread(threading.Thread):
                 print(f"[Controller] ⏸️ Pausing {self.step_pause_sec:.1f}s before next grid step...")
                 time.sleep(self.step_pause_sec)
 
-    def turn_to_relative(self, deg: float, speed: float = setting("navigation.turn_speed_dps")):
+    def turn_to_relative(self, deg: float, speed: float = setting("navigation.turn_speed_dps"),
+                         tolerance_deg=None):
         """Closed-loop relative in-place turn (+90 Left, -90 Right, 180 Around)."""
         # In DJI SDK: z=+90 rotates CCW (yaw becomes -90°), z=-90 rotates CW (yaw becomes +90°)
         expected_yaw_delta = deg * setting("robot.yaw_command_sign")
@@ -310,13 +314,21 @@ class RobotControllerThread(threading.Thread):
 
             self.stop_chassis()
             time.sleep(setting("navigation.turn_settle_sec"))
+<<<<<<< HEAD
             end_state = self.align_turn_heading(target_heading)
             self.target_heading_deg = target_heading
             print(f"[Controller] ✅ Turn Completed: Current Yaw = {end_state.yaw:+.1f}° (Target Grid Heading = {target_heading:.0f}°)\n")
+=======
+            end_state = self.align_turn_heading(target_heading, tolerance_deg=tolerance_deg)
+            self.target_heading_deg = target_heading
+            print(f"[Controller] ✅ Turn Completed: Current Yaw = {end_state.yaw:+.1f}° (Target Grid Heading = {target_heading:.0f}°)\n")
+            return end_state
+>>>>>>> stamp
         finally:
             self.stop_chassis()
             self.wall_pid.reset()
 
+<<<<<<< HEAD
     def align_turn_heading(self, target_heading: float):
         """Correct a completed turn using fresh yaw until the chassis settles on target."""
         deadline = time.monotonic() + setting("slam.heading_align_timeout_sec")
@@ -324,6 +336,20 @@ class RobotControllerThread(threading.Thread):
         # Require feedback received after entering the correction phase.
         last_attitude_at = time.monotonic()
         within_tolerance = 0
+=======
+    def align_turn_heading(self, target_heading: float, tolerance_deg=None):
+        """Correct a completed turn using fresh yaw until the chassis settles on target."""
+        deadline = time.monotonic() + setting("slam.heading_align_timeout_sec")
+        tolerance = (setting("slam.heading_tolerance_deg")
+                     if tolerance_deg is None else tolerance_deg)
+        # Require feedback received after entering the correction phase.
+        last_attitude_at = time.monotonic()
+        within_tolerance = 0
+        probe_yaw = None
+        probe_error = None
+        probe_started = None
+        reversed_sign = False
+>>>>>>> stamp
 
         while time.monotonic() < deadline and self._running.is_set():
             state = self.sensor_hub.get_latest_state()
@@ -340,11 +366,32 @@ class RobotControllerThread(threading.Thread):
             error = (target_heading - state.yaw + 180.0) % 360.0 - 180.0
             if abs(error) <= tolerance:
                 self.stop_chassis()
+<<<<<<< HEAD
+=======
+                probe_yaw = None
+>>>>>>> stamp
                 within_tolerance += 1
                 if within_tolerance >= 3:
                     return state
             else:
                 within_tolerance = 0
+<<<<<<< HEAD
+=======
+                if probe_yaw is None:
+                    probe_yaw, probe_error, probe_started = state.yaw, error, now
+                elif now - probe_started >= 0.20:
+                    yaw_change = (state.yaw - probe_yaw + 180.0) % 360.0 - 180.0
+                    if yaw_change * probe_error < -0.5:
+                        self.stop_chassis()
+                        if reversed_sign:
+                            raise RuntimeError("Yaw correction moved away from target in both directions")
+                        self.yaw_speed_command_sign *= -1
+                        reversed_sign = True
+                        print("[Controller] Yaw correction reversed after feedback showed increasing error")
+                        probe_yaw, probe_error, probe_started = state.yaw, error, now
+                    elif abs(yaw_change) >= 0.5:
+                        probe_yaw, probe_error, probe_started = state.yaw, error, now
+>>>>>>> stamp
                 correction_speed = max(4.0, min(15.0, abs(error) * 1.8))
                 self.drive_speed(0.0, 0.0, math.copysign(correction_speed, error))
             time.sleep(0.01)
