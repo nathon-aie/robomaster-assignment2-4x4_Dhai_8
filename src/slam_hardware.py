@@ -2,7 +2,7 @@
 import math
 import statistics
 import time
-from .grid_slam import BlockedCellError, wrap
+from .grid_slam import BlockedCellError, ScanHeadingDriftError, wrap
 from .sdk_connection import cancel_chassis_speed_timer, load_robot_sdk, stop_chassis_wheels
 from .settings import get as setting
 
@@ -63,7 +63,7 @@ class HardwareBackend:
                                        'position_m': [state.pos_x, state.pos_y]})
                 self.scan_position_warning_logged = True
             if yaw_drift > setting('scan_guard.max_heading_drift_deg'):
-                raise RuntimeError('Stationary scan: chassis moved (yaw drift={:.2f} deg, position drift={:.3f} m)'.format(
+                raise ScanHeadingDriftError('Stationary scan: chassis moved (yaw drift={:.2f} deg, position drift={:.3f} m)'.format(
                     yaw_drift, position_drift))
         return waited
 

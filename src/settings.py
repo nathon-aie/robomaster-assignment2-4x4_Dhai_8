@@ -49,6 +49,7 @@ for key in ("sensors.sharp_filter", "sensors.tof_filter"):
         raise ValueError("{}.median_window must be a positive integer".format(key))
 
 for key in ("slam.sensor_timeout_sec", "slam.max_sensor_age_sec", "slam.scan_pose_recovery_timeout_sec", "slam.wall_margin_m",
+            "navigation.obstacle_recheck_timeout_sec",
             "slam.localization_gate_m", "slam.initial_variance_m2", "slam.motion_variance_m2",
             "slam.range_variance_m2", "slam.max_pose_std_m", "slam.cell_arrival_tolerance_m",
             "slam.heading_align_timeout_sec", "gimbal.action_timeout_sec",

@@ -132,6 +132,24 @@ class RobotControllerThread(threading.Thread):
         # Close invalid readings and stale packets still fail above.
         return replace(state, tof_valid=True, tof_filtered_mm=min(distance, filtered))
 
+    def confirm_front_clear(self, last_tof_at, clear_distance_mm):
+        """Keep the chassis stopped until two new ToF packets show a clear path."""
+        self.stop_chassis()
+        deadline = time.monotonic() + setting("navigation.obstacle_recheck_timeout_sec")
+        clear_samples = 0
+        while self._running.is_set() and time.monotonic() < deadline:
+            state = self.motion_state()
+            if state.tof_received_at > last_tof_at:
+                last_tof_at = state.tof_received_at
+                if state.tof_valid and state.tof_filtered_mm > clear_distance_mm:
+                    clear_samples += 1
+                    if clear_samples >= 2:
+                        return True
+                else:
+                    clear_samples = 0
+            time.sleep(1.0 / setting("navigation.control_rate_hz"))
+        return False
+
     def align_at_cell_center(self, duration_sec: float = setting("navigation.align_default_duration_sec")):
         """In-place PID fine alignment to ensure robot is centered (|L-R| < 2cm or L/R +- 2cm)."""
         t_end = time.monotonic() + duration_sec
@@ -181,6 +199,7 @@ class RobotControllerThread(threading.Thread):
 
         last_case_id = None
         reason = "interrupted"
+        false_obstacle_count = 0
 
         while dist_traveled < self.grid_size_m and self._running.is_set():
             loop_t0 = time.monotonic()
@@ -229,15 +248,26 @@ class RobotControllerThread(threading.Thread):
                 print(f"  [PID Centering] {case_name} | Lat Err: {err_y:+.1f} mm | vy: {vy:+.2f} m/s | L: {state.sharp_left_mm} mm | R: {state.sharp_right_mm} mm")
                 last_case_id = case_id
 
+            stop_distance = self.wall_pid.front_target_mm + setting("navigation.front_stop_tolerance_mm")
             if state.tof_valid and state.tof_filtered_mm is not None:
-                if state.tof_filtered_mm <= setting("navigation.emergency_front_mm"):
-                    reason = "emergency_obstacle"
+                emergency = state.tof_filtered_mm <= setting("navigation.emergency_front_mm")
+                premature_wall = (state.tof_filtered_mm <= stop_distance
+                                  and dist_traveled < self.grid_size_m
+                                  * setting("navigation.front_wall_arrival_min_fraction"))
+                if emergency or premature_wall:
+                    self.stop_chassis()
+                    if (false_obstacle_count < 2
+                            and self.confirm_front_clear(state.tof_received_at, stop_distance)):
+                        false_obstacle_count += 1
+                        # Time spent stopped for verification is not travel time.
+                        t_start += time.monotonic() - loop_t0
+                        continue
+                    reason = "emergency_obstacle" if emergency else "front_wall"
                     break
             if dist_traveled >= self.grid_size_m:
                 reason = "distance_reached"
                 break
             if state.tof_valid and state.tof_filtered_mm is not None:
-                stop_distance = self.wall_pid.front_target_mm + setting("navigation.front_stop_tolerance_mm")
                 if state.tof_filtered_mm <= stop_distance:
                     reason = "front_wall"
                     break
@@ -282,6 +312,7 @@ class RobotControllerThread(threading.Thread):
         print(f"  [Grid Step {step_idx}/{total_steps} Done] Local Pos: ({end_state.pos_x:+.2f}m, {end_state.pos_y:+.2f}m) | Yaw: {end_state.yaw:+.1f}° | Sharp L: {end_state.sharp_left_mm} mm | R: {end_state.sharp_right_mm} mm | Diff: {diff_str} | ToF: {end_state.tof_filtered_mm} mm")
 
         return {"completed": completed, "reason": reason, "distance_m": forward,
+                "false_obstacle_count": false_obstacle_count,
                 "lateral_deviation_m": lateral, "heading_error_deg": heading_error}
 
     def move_forward_grid(self, cells: int = 1):

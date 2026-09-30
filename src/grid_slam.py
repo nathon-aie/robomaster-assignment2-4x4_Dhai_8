@@ -33,6 +33,10 @@ class BlockedCellError(RuntimeError):
             distance_mm, stop_distance_mm))
 
 
+class ScanHeadingDriftError(RuntimeError):
+    """Chassis yaw changed during a stationary scan; the scan must be repeated."""
+
+
 class GridMap:
     def __init__(self):
         self.edges = {}  # Canonical undirected edge -> wall present/absent.
@@ -281,7 +285,17 @@ class FrontierExplorer:
                     self.slam.events.append({'timestamp': time.time(), 'type': 'scan_skipped',
                                              'cell': list(cell), 'reason': 'previously_scanned'})
                 else:
-                    ranges, heading, yaw = self.backend.scan()
+                    try:
+                        ranges, heading, yaw = self.backend.scan()
+                    except ScanHeadingDriftError:
+                        # Discard the partial scan, restore chassis heading,
+                        # then collect a fresh complete scan at this cell.
+                        self.slam.events.append({'timestamp': time.time(),
+                                                 'type': 'scan_heading_retry',
+                                                 'cell': list(cell)})
+                        self.backend.align_current_heading(
+                            setting('navigation.heading_realign_tolerance_deg'))
+                        ranges, heading, yaw = self.backend.scan()
                     rear = (heading + 2) % 4
                     required = {(heading + r) % 4 for r in (0, 3, 1)}
                     full_scan = set(ranges) == set(range(4))
