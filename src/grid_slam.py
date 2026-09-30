@@ -356,22 +356,22 @@ class FrontierExplorer:
                 self.moves += 1
                 interval = setting('navigation.heading_realign_every_cells')
                 if (interval > 0 and self.moves % interval == 0
-                        and hasattr(self.backend, 'align_current_heading')):
+                        and hasattr(self.backend, 'face_zero')):
                     tolerance = setting('navigation.heading_realign_tolerance_deg')
                     self.slam.events.append({'timestamp': time.time(),
-                                             'type': 'heading_align_start',
+                                             'type': 'face_zero_start',
                                              'after_moves': self.moves,
-                                             'heading': self.slam.heading,
+                                             'heading_before': self.slam.heading,
                                              'cell': list(self.slam.cell)})
-                    aligned_yaw = self.backend.align_current_heading(tolerance)
+                    aligned_yaw = self.backend.face_zero(tolerance)
                     if abs(wrap(aligned_yaw - self.slam.heading * 90)) > tolerance:
-                        raise RuntimeError('Chassis heading alignment outside tolerance')
+                        raise RuntimeError('Chassis heading restore outside tolerance')
                     self.slam.pose[2] = aligned_yaw
                     if (self.slam.trajectory
                             and self.slam.trajectory[-1]['cell'] == list(self.slam.cell)):
                         self.slam.trajectory[-1]['pose'][2] = aligned_yaw
                     self.slam.events.append({'timestamp': time.time(),
-                                             'type': 'heading_align',
+                                             'type': 'face_zero',
                                              'after_moves': self.moves,
                                              'cell': list(self.slam.cell),
                                              'heading': self.slam.heading,

@@ -52,7 +52,8 @@ for key in ("slam.sensor_timeout_sec", "slam.max_sensor_age_sec", "slam.scan_pos
             "navigation.obstacle_recheck_timeout_sec",
             "slam.localization_gate_m", "slam.initial_variance_m2", "slam.motion_variance_m2",
             "slam.range_variance_m2", "slam.max_pose_std_m", "slam.cell_arrival_tolerance_m",
-            "slam.heading_align_timeout_sec", "gimbal.action_timeout_sec",
+            "slam.heading_align_timeout_sec", "slam.heading_feedback_recovery_timeout_sec",
+            "gimbal.action_timeout_sec",
             "gimbal.yaw_speed_dps", "gimbal.pitch_speed_dps"):
     value = get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float("inf"):

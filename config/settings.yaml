@@ -5,7 +5,7 @@ robot:
   # SDK z command sign relative to yaw telemetry; verify on the physical robot
   yaw_command_sign: -1
   # Reverse drive_speed z after observing heading corrections turn away.
-  yaw_speed_command_sign: -1
+  yaw_speed_command_sign: 1
 
 paths:
   calibration: calibration_output/calibration.json
@@ -24,7 +24,7 @@ sensors:
 
 navigation:
   grid_size_m: 0.60
-  base_speed_mps: 0.450
+  base_speed_mps: 0.425
   step_test_speed_mps: 0.22
   control_rate_hz: 20
   max_heading_error_deg: 15
@@ -46,14 +46,15 @@ navigation:
   minimum_front_speed_mps: 0.05
   timeout_multiplier: 1.8
   timeout_extra_sec: 1.5
-  align_duration_sec: 0.5
+  align_duration_sec: 0.3
   align_default_duration_sec: 0.4
   step_pause_sec: 1.0
   turn_speed_dps: 90
   turn_settle_sec: 0.30
-  heading_realign_every_cells: 1
+  # Reference zero every two cells, then restore the arrival heading before scanning
+  heading_realign_every_cells: 2
   heading_realign_tolerance_deg: 5
-  duration_sec: 0
+  duration_sec: 0.5
 
 pid:
   lateral: {kp: 0.0005, ki: 0.0001, kd: 0.0, max_speed: 0.04, integral_limit: 30}
@@ -133,6 +134,8 @@ slam:
   max_moves: 1000
   heading_tolerance_deg: 1
   heading_align_timeout_sec: 3
+  # Wait for fresh yaw while the wheels are stopped if feedback briefly drops out
+  heading_feedback_recovery_timeout_sec: 2
   startup_settle_sec: 1.0
   stationary_settle_sec: 0.3
   stationary_timeout_sec: 3

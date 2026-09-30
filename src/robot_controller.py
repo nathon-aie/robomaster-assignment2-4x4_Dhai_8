@@ -9,10 +9,10 @@ Step 3 Requirements (WORK.md):
 
 try:
     from .settings import get as setting, project_path
-    from .sdk_connection import chassis_speed_has_no_ack
+    from .sdk_connection import cancel_chassis_speed_timer, chassis_speed_has_no_ack
 except ImportError:
     from settings import get as setting, project_path
-    from sdk_connection import chassis_speed_has_no_ack
+    from sdk_connection import cancel_chassis_speed_timer, chassis_speed_has_no_ack
 
 from dataclasses import replace
 import math
@@ -97,6 +97,14 @@ class RobotControllerThread(threading.Thread):
             self.robot.chassis.drive_speed(x=0, y=0, z=0)
         except Exception:
             pass
+
+    def brake_chassis(self):
+        """Send zero speed immediately, then require a wheel-stop ACK."""
+        self.stop_chassis()
+        acknowledged = self.robot.chassis.drive_wheels(w1=0, w2=0, w3=0, w4=0)
+        cancel_chassis_speed_timer(self.robot.chassis)
+        if acknowledged is not True:
+            raise RuntimeError("Chassis brake was not acknowledged")
 
     # -----------------------------------------------------------------------
     # Step 3: Grid-by-Grid Navigation & PID Centering
@@ -200,6 +208,7 @@ class RobotControllerThread(threading.Thread):
         last_case_id = None
         reason = "interrupted"
         false_obstacle_count = 0
+        stop_tof_mm = None
 
         while dist_traveled < self.grid_size_m and self._running.is_set():
             loop_t0 = time.monotonic()
@@ -210,6 +219,12 @@ class RobotControllerThread(threading.Thread):
 
             # 1. Pull clean, pre-filtered sensor snapshot from Thread 1 (Zero hardware overhead)
             state = self.motion_state()
+            if (state.tof_valid and state.tof_filtered_mm is not None
+                    and state.tof_filtered_mm <= setting("navigation.emergency_front_mm")):
+                stop_tof_mm = state.tof_filtered_mm
+                self.brake_chassis()
+                reason = "emergency_obstacle"
+                break
 
             # 2. Update forward distance traveled along target heading (60 cm / 0.60 m)
             dx = state.pos_x - start_x
@@ -250,27 +265,29 @@ class RobotControllerThread(threading.Thread):
 
             stop_distance = self.wall_pid.front_target_mm + setting("navigation.front_stop_tolerance_mm")
             if state.tof_valid and state.tof_filtered_mm is not None:
-                emergency = state.tof_filtered_mm <= setting("navigation.emergency_front_mm")
                 premature_wall = (state.tof_filtered_mm <= stop_distance
                                   and dist_traveled < self.grid_size_m
                                   * setting("navigation.front_wall_arrival_min_fraction"))
-                if emergency or premature_wall:
-                    self.stop_chassis()
+                if premature_wall:
+                    self.brake_chassis()
                     if (false_obstacle_count < 2
                             and self.confirm_front_clear(state.tof_received_at, stop_distance)):
                         false_obstacle_count += 1
                         # Time spent stopped for verification is not travel time.
                         t_start += time.monotonic() - loop_t0
                         continue
-                    reason = "emergency_obstacle" if emergency else "front_wall"
+                    stop_tof_mm = state.tof_filtered_mm
+                    reason = "front_wall"
+                    break
+            if state.tof_valid and state.tof_filtered_mm is not None:
+                if state.tof_filtered_mm <= stop_distance:
+                    stop_tof_mm = state.tof_filtered_mm
+                    self.brake_chassis()
+                    reason = "front_wall"
                     break
             if dist_traveled >= self.grid_size_m:
                 reason = "distance_reached"
                 break
-            if state.tof_valid and state.tof_filtered_mm is not None:
-                if state.tof_filtered_mm <= stop_distance:
-                    reason = "front_wall"
-                    break
             self.drive_speed(vx=vx, vy=vy, vz=vz)
 
             # Sleep remaining loop dt
@@ -288,21 +305,32 @@ class RobotControllerThread(threading.Thread):
                     (state.yaw - self.target_heading_deg + 180.0) % 360.0 - 180.0)
 
         end_state = self.motion_state()
+        emergency_limit = setting("navigation.emergency_front_mm")
+        if (end_state.tof_valid and end_state.tof_filtered_mm is not None
+                and end_state.tof_filtered_mm <= emergency_limit):
+            self.brake_chassis()
+            reason = "emergency_obstacle"
         forward, lateral, heading_error = arrival_errors(end_state)
         def arrived(forward_distance):
             if reason == "front_wall":
                 # ToF defines the stopping position near the far end of a cell.
-                # Reject a wall at the start; do not require a full odometry step.
-                return forward_distance >= self.grid_size_m * setting("navigation.front_wall_arrival_min_fraction")
+                # Reject a wall at the start or motion beyond the cell limit.
+                return (self.grid_size_m * setting("navigation.front_wall_arrival_min_fraction")
+                        <= forward_distance <= self.grid_size_m + setting("slam.cell_arrival_tolerance_m"))
             return (reason == "distance_reached" and abs(forward_distance - self.grid_size_m)
                     <= setting("slam.cell_arrival_tolerance_m"))
 
         completed = self._running.is_set() and arrived(forward)
-        if completed:
+        if completed and reason != "front_wall":
             self.align_at_cell_center(duration_sec=setting("navigation.align_duration_sec"))
             end_state = self.motion_state()
             forward, lateral, heading_error = arrival_errors(end_state)
             completed = self._running.is_set() and arrived(forward)
+            if (end_state.tof_valid and end_state.tof_filtered_mm is not None
+                    and end_state.tof_filtered_mm <= emergency_limit):
+                self.brake_chassis()
+                reason = "emergency_obstacle"
+                completed = False
 
         if not completed and reason == "distance_reached":
             reason = "arrival_pose_outside_tolerance"
@@ -313,6 +341,8 @@ class RobotControllerThread(threading.Thread):
 
         return {"completed": completed, "reason": reason, "distance_m": forward,
                 "false_obstacle_count": false_obstacle_count,
+                "stop_tof_mm": stop_tof_mm, "end_tof_mm": end_state.tof_filtered_mm,
+                "front_stop_limit_mm": self.wall_pid.front_target_mm + setting("navigation.front_stop_tolerance_mm"),
                 "lateral_deviation_m": lateral, "heading_error_deg": heading_error}
 
     def move_forward_grid(self, cells: int = 1):
@@ -365,17 +395,32 @@ class RobotControllerThread(threading.Thread):
         probe_error = None
         probe_started = None
         reversed_sign = False
+        recovery_started = None
 
-        while time.monotonic() < deadline and self._running.is_set():
+        while self._running.is_set() and (time.monotonic() < deadline or recovery_started is not None):
             state = self.sensor_hub.get_latest_state()
             now = time.monotonic()
             if not 0 < state.attitude_received_at <= now or now - state.attitude_received_at > setting("slam.max_sensor_age_sec"):
-                raise RuntimeError("Stale chassis attitude during turn alignment")
+                if recovery_started is None:
+                    self.stop_chassis()
+                    recovery_started = now
+                    within_tolerance = 0
+                    probe_yaw = None
+                    print("[Controller] Yaw feedback paused; waiting with chassis stopped")
+                if now - recovery_started >= setting("slam.heading_feedback_recovery_timeout_sec"):
+                    raise RuntimeError("Stale chassis attitude during turn alignment after recovery timeout")
+                time.sleep(0.01)
+                continue
             if not math.isfinite(state.yaw):
                 raise RuntimeError("Invalid chassis yaw during turn alignment")
             if state.attitude_received_at <= last_attitude_at:
                 time.sleep(0.01)
                 continue
+            if recovery_started is not None:
+                deadline += now - recovery_started
+                recovery_started = None
+                probe_yaw = None
+                print("[Controller] Fresh yaw feedback restored; resuming heading alignment")
             last_attitude_at = state.attitude_received_at
 
             error = (target_heading - state.yaw + 180.0) % 360.0 - 180.0
@@ -407,6 +452,8 @@ class RobotControllerThread(threading.Thread):
 
         if not self._running.is_set():
             raise RuntimeError("Chassis turn was interrupted")
+        if recovery_started is not None:
+            raise RuntimeError("Stale chassis attitude during turn alignment after recovery timeout")
         raise RuntimeError("Chassis heading alignment timed out")
 
     def turn_left(self, deg: float = 90.0, speed: float = setting("navigation.turn_speed_dps")):
@@ -424,7 +471,11 @@ class RobotControllerThread(threading.Thread):
     def emergency_stop(self):
         """Stops all robot motion immediately."""
         self.current_action = "EMERGENCY_STOP"
-        self.stop_chassis()
+        try:
+            self.brake_chassis()
+        except Exception as exc:
+            print("[Controller] Emergency brake warning: {}".format(exc))
+            self.stop_chassis()
 
     def enable_motion(self):
         """Enable synchronous motion/scan actions without starting the queue worker."""

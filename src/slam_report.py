@@ -46,6 +46,13 @@ def action_steps(data):
                 actions.append('ALIGN verified: yaw {:+.1f} deg (tolerance +/-{:.1f} deg)'.format(
                     e['yaw_deg'], e['tolerance_deg']))
                 heading = e['heading']
+            elif kind == 'face_zero_start':
+                actions.append('FACE ZERO after {} moves (from {} deg)'.format(
+                    e['after_moves'], e['heading_before'] * 90))
+            elif kind == 'face_zero':
+                actions.append('FACE ZERO restored: heading {} deg, yaw {:+.1f} deg (tolerance +/-{:.1f} deg)'.format(
+                    e['heading'] * 90, e['yaw_deg'], e['tolerance_deg']))
+                heading = e['heading']
             elif kind == 'sign_inspection':
                 actions.append('CAMERA {} wall: {} frame(s), detected in {}'.format(
                     e['direction'], e['frames'], e['detected_frames']))
@@ -58,7 +65,13 @@ def action_steps(data):
             elif kind == 'walk_start':
                 actions.append('WALK {} | nominal {:.2f} m | Sharp centering + ToF guard'.format(NAMES[e['direction']], e['cell_size_m']))
             elif kind == 'walk_end':
-                actions.append('WALK stop: {} | actual {:.2f} m | {}'.format(e['reason'], e['distance_m'], 'OK' if e['completed'] else 'FAILED'))
+                stop_tof = e.get('stop_tof_mm')
+                detail = (' | ToF at brake {:.0f} mm'.format(stop_tof)
+                          if stop_tof is not None else '')
+                actions.append('WALK stop: {} | actual {:.2f} m | {}{}'.format(
+                    e['reason'], e['distance_m'], 'OK' if e['completed'] else 'FAILED', detail))
+            elif kind == 'front_emergency_after_stop':
+                actions.append('FRONT EMERGENCY after stop: {:.0f} mm'.format(e['distance_mm']))
             elif kind == 'chassis_wheel_stop':
                 actions.append('STOP wheels [ACK]')
             elif kind == 'scan':

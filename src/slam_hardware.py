@@ -311,8 +311,8 @@ class HardwareBackend:
                     self.initialize_gimbal_reference()
                 # Establish the Gimbal reference once at startup. Each scan then
                 # starts from the front position left by the previous scan/move.
-                # Sweep left first; include the rear at startup and after a
-                # chassis heading reset changes which wall is behind us.
+                # Sweep left first; include the rear at startup or when a
+                # separate mapping action explicitly requests a full scan.
                 directions = ((3, -90), (2, -180), (1, 90)) if scan_rear else ((3, -90), (1, 90))
                 for relative, yaw in directions:
                     direction = (start_heading + relative) % 4
@@ -400,6 +400,17 @@ class HardwareBackend:
         if not result['completed']:
             raise RuntimeError('Cell motion failed: {}'.format(result['reason']))
         after = self.prepare_stationary_scan()
+        if not self.fresh(after, ['tof_received_at']):
+            raise RuntimeError('Stale front ToF after stopping at cell')
+        front_mm = self.system.calibration_mgr.raw_to_mm('tof', after.tof_raw)
+        if front_mm is None or not math.isfinite(front_mm) or front_mm <= 0:
+            raise RuntimeError('Invalid front ToF after stopping at cell')
+        if after.tof_filtered_mm is not None and math.isfinite(after.tof_filtered_mm):
+            front_mm = min(front_mm, after.tof_filtered_mm)
+        if front_mm <= setting('navigation.emergency_front_mm'):
+            self.event_log.append({'timestamp': time.time(), 'type': 'front_emergency_after_stop',
+                                   'distance_mm': front_mm, 'direction': direction})
+            raise RuntimeError('Front clearance below emergency limit after stopping: {:.0f} mm'.format(front_mm))
         return (after.pos_x - before.pos_x, after.pos_y - before.pos_y), after.yaw
 
     def align_current_heading(self, tolerance_deg):
@@ -416,6 +427,39 @@ class HardwareBackend:
         error = wrap(state.yaw - target)
         if abs(error) > tolerance_deg:
             raise RuntimeError('Chassis heading alignment outside tolerance: {:.1f} deg'.format(error))
+        self.controller.target_heading_deg = target
+        return state.yaw
+
+    def face_zero(self, tolerance_deg):
+        """Use zero as a heading reference, then restore the scan heading."""
+        self.ensure_running()
+        target = wrap(self.heading * 90)
+        if abs(wrap(self.controller.target_heading_deg - target)) > tolerance_deg:
+            raise RuntimeError('Chassis and grid headings disagree before face_zero')
+        if self.heading != 0:
+            command = wrap(-target) / setting('robot.yaw_command_sign')
+            self.event_log.append({'timestamp': time.time(), 'type': 'chassis_turn',
+                                   'degrees': command, 'reason': 'face_zero_reference'})
+            zero_state = self.controller.turn_to_relative(command, tolerance_deg=tolerance_deg)
+            if abs(wrap(zero_state.yaw)) > tolerance_deg:
+                raise RuntimeError('Chassis zero reference outside tolerance')
+            # Keep the Gimbal scan tied to the arrival direction. The zero
+            # reference is only an intermediate correction, not a scan heading.
+            restore_command = 180.0 if abs(command) == 180.0 else -command
+            self.event_log.append({'timestamp': time.time(), 'type': 'chassis_turn',
+                                   'degrees': restore_command, 'reason': 'face_zero_restore'})
+            self.controller.turn_to_relative(restore_command, tolerance_deg=tolerance_deg)
+        else:
+            try:
+                self.controller.align_turn_heading(target, tolerance_deg=tolerance_deg)
+            finally:
+                self.controller.stop_chassis()
+        # Both turns may enter speed mode for yaw correction. Restore an
+        # acknowledged wheel stop before handing control to the Gimbal.
+        state = self.prepare_stationary_scan()
+        if abs(wrap(state.yaw - target)) > tolerance_deg:
+            raise RuntimeError('Chassis heading restore outside tolerance: {:.1f} deg'.format(
+                wrap(state.yaw - target)))
         self.controller.target_heading_deg = target
         return state.yaw
 
