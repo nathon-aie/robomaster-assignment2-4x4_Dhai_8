@@ -338,27 +338,29 @@ class FrontierExplorer:
                     'from': list(cell), 'to': list(target), 'direction': direction,
                     'backtrack': backtrack, 'odometry_delta_m': list(displacement), 'yaw': yaw})
                 self.slam.predict(target, displacement, yaw)
+                self.slam.heading = direction
                 self.moves += 1
-                interval = setting('navigation.face_zero_every_cells')
+                interval = setting('navigation.heading_realign_every_cells')
                 if (interval > 0 and self.moves % interval == 0
-                        and hasattr(self.backend, 'face_zero')):
-                    tolerance = setting('navigation.face_zero_tolerance_deg')
+                        and hasattr(self.backend, 'align_current_heading')):
+                    tolerance = setting('navigation.heading_realign_tolerance_deg')
                     self.slam.events.append({'timestamp': time.time(),
-                                             'type': 'face_zero_start',
+                                             'type': 'heading_align_start',
                                              'after_moves': self.moves,
+                                             'heading': self.slam.heading,
                                              'cell': list(self.slam.cell)})
-                    aligned_yaw = self.backend.face_zero(tolerance)
-                    if abs(wrap(aligned_yaw)) > tolerance:
-                        raise RuntimeError('Chassis zero alignment outside tolerance')
-                    self.slam.heading = 0
+                    aligned_yaw = self.backend.align_current_heading(tolerance)
+                    if abs(wrap(aligned_yaw - self.slam.heading * 90)) > tolerance:
+                        raise RuntimeError('Chassis heading alignment outside tolerance')
                     self.slam.pose[2] = aligned_yaw
                     if (self.slam.trajectory
                             and self.slam.trajectory[-1]['cell'] == list(self.slam.cell)):
                         self.slam.trajectory[-1]['pose'][2] = aligned_yaw
                     self.slam.events.append({'timestamp': time.time(),
-                                             'type': 'face_zero',
+                                             'type': 'heading_align',
                                              'after_moves': self.moves,
                                              'cell': list(self.slam.cell),
+                                             'heading': self.slam.heading,
                                              'yaw_deg': aligned_yaw,
                                              'tolerance_deg': tolerance})
         except KeyboardInterrupt:

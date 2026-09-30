@@ -402,30 +402,21 @@ class HardwareBackend:
         after = self.prepare_stationary_scan()
         return (after.pos_x - before.pos_x, after.pos_y - before.pos_y), after.yaw
 
-    def face_zero(self, tolerance_deg):
-        """Point the chassis along the initial grid axis and verify fresh yaw."""
+    def align_current_heading(self, tolerance_deg):
+        """Verify the current grid heading without returning to the start direction."""
         self.ensure_running()
-        target = wrap(self.controller.target_heading_deg)
-        if abs(target) > 0.01:
-            command = wrap(-target) / setting('robot.yaw_command_sign')
-            state = self.controller.turn_to_relative(command, tolerance_deg=tolerance_deg)
-        else:
-            try:
-                state = self.controller.align_turn_heading(0.0, tolerance_deg=tolerance_deg)
-            finally:
-                self.controller.stop_chassis()
+        target = wrap(self.heading * 90)
+        try:
+            self.controller.align_turn_heading(target, tolerance_deg=tolerance_deg)
+        finally:
+            self.controller.stop_chassis()
         # Heading correction uses drive_speed, which re-enters speed mode even
         # for a zero command. Restore an acknowledged wheel stop before scanning.
         state = self.prepare_stationary_scan()
-        error = wrap(state.yaw)
+        error = wrap(state.yaw - target)
         if abs(error) > tolerance_deg:
-            raise RuntimeError('Chassis zero alignment outside tolerance: {:.1f} deg'.format(error))
-        # A heading reset changes which wall is behind the robot. The next
-        # scan must measure all four directions before SLAM can plan a route.
-        self.force_full_scan = (getattr(self, 'force_full_scan', False)
-                                or self.heading != 0)
-        self.heading = 0
-        self.controller.target_heading_deg = 0.0
+            raise RuntimeError('Chassis heading alignment outside tolerance: {:.1f} deg'.format(error))
+        self.controller.target_heading_deg = target
         return state.yaw
 
     def stop(self):

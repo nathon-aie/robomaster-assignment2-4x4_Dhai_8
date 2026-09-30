@@ -39,12 +39,13 @@ def action_steps(data):
             elif kind == 'chassis_turn':
                 degrees = e['degrees']
                 actions.append('TURN {} {} deg'.format('right' if degrees < 0 else 'around' if abs(degrees) == 180 else 'left', abs(degrees)))
-            elif kind == 'face_zero_start':
-                actions.append('ALIGN chassis to 0 deg after {} moves'.format(e['after_moves']))
-            elif kind == 'face_zero':
+            elif kind == 'heading_align_start':
+                actions.append('ALIGN chassis to {} deg after {} moves'.format(
+                    e['heading'] * 90, e['after_moves']))
+            elif kind == 'heading_align':
                 actions.append('ALIGN verified: yaw {:+.1f} deg (tolerance +/-{:.1f} deg)'.format(
                     e['yaw_deg'], e['tolerance_deg']))
-                heading = 0
+                heading = e['heading']
             elif kind == 'sign_inspection':
                 actions.append('CAMERA {} wall: {} frame(s), detected in {}'.format(
                     e['direction'], e['frames'], e['detected_frames']))

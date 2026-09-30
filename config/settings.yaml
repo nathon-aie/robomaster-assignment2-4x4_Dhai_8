@@ -24,17 +24,17 @@ sensors:
 
 navigation:
   grid_size_m: 0.60
-  base_speed_mps: 0.40
+  base_speed_mps: 0.425
   step_test_speed_mps: 0.22
   control_rate_hz: 20
   max_heading_error_deg: 15
   max_lateral_deviation_m: 0.15
-  nominal_side_mm: 160
+  nominal_side_mm: 150
   tolerance_mm: 20
-  side_wall_threshold_mm: 280
-  front_wall_threshold_mm: 350
-  front_target_mm: 250
-  emergency_front_mm: 200
+  side_wall_threshold_mm: 220
+  front_wall_threshold_mm: 300
+  front_target_mm: 225
+  emergency_front_mm: 175
   front_stop_tolerance_mm: 20
   # A ToF wall stop after halfway can finish a cell despite odometry drift
   front_wall_arrival_min_fraction: 0.5
@@ -44,18 +44,18 @@ navigation:
   minimum_front_speed_mps: 0.05
   timeout_multiplier: 1.8
   timeout_extra_sec: 1.5
-  align_duration_sec: 0.3
+  align_duration_sec: 0.5
   align_default_duration_sec: 0.4
   step_pause_sec: 1.0
   turn_speed_dps: 90
   turn_settle_sec: 0.30
-  face_zero_every_cells: 2
-  face_zero_tolerance_deg: 5
+  heading_realign_every_cells: 2
+  heading_realign_tolerance_deg: 5
   duration_sec: 0
 
 pid:
-  lateral: {kp: 0.0030, ki: 0.0001, kd: 0.0010, max_speed: 0.05, integral_limit: 30}
-  yaw: {kp: 3.0, ki: 0.0, kd: 0.0, max_speed: 90, integral_limit: 20}
+  lateral: {kp: 0.0005, ki: 0.0001, kd: 0.0, max_speed: 0.04, integral_limit: 30}
+  yaw: {kp: 3.0, ki: 0.1, kd: 0.0, max_speed: 90, integral_limit: 20}
 
 telemetry:
   buffer_capacity: 30000
