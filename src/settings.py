@@ -119,6 +119,12 @@ for key in ("navigation.max_heading_error_deg", "navigation.max_lateral_deviatio
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float("inf"):
         raise ValueError("Setting {} must be finite and positive".format(key))
 
+turn_heading_tolerance = get("navigation.turn_heading_tolerance_deg")
+if (isinstance(turn_heading_tolerance, bool)
+        or not isinstance(turn_heading_tolerance, (int, float))
+        or not 0 < turn_heading_tolerance <= get("slam.heading_tolerance_deg")):
+    raise ValueError("navigation.turn_heading_tolerance_deg must be positive and no greater than slam.heading_tolerance_deg")
+
 for key in ("scan_guard.max_heading_drift_deg", "scan_guard.max_position_drift_m"):
     value = get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float("inf"):

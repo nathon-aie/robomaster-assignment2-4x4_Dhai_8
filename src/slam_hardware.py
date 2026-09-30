@@ -385,6 +385,8 @@ class HardwareBackend:
             self.event_log.append({'timestamp': time.time(), 'type': 'chassis_turn',
                                    'degrees': {1: -90, 2: 180, 3: 90}[turn]})
             self.controller.turn_to_relative({1: -90, 2: 180, 3: 90}[turn])
+            self.event_log.append({'timestamp': time.time(), 'type': 'chassis_turn_alignment',
+                                   **self.controller.last_turn_alignment})
         self.heading = direction
         self.align_heading()
         self.ensure_gimbal_front('after_chassis_turn' if turn else 'before_motion', restore_follow_mode=True)

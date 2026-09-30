@@ -19,8 +19,8 @@ sensors:
   tof_index: 0
   sharp_left: {board_id: 1, port: 1, adc_index: 0}
   sharp_right: {board_id: 2, port: 2, adc_index: 3}
-  sharp_filter: {min_valid: 20, max_valid: 1020, median_window: 5, ema_alpha: 0.35}
-  tof_filter: {min_valid: 10, max_valid: 5000, median_window: 5, ema_alpha: 0.40}
+  sharp_filter: {min_valid: 20, max_valid: 1020, median_window: 3, ema_alpha: 0.35}
+  tof_filter: {min_valid: 10, max_valid: 5000, median_window: 3, ema_alpha: 0.40}
 
 navigation:
   grid_size_m: 0.60
@@ -33,27 +33,28 @@ navigation:
   tolerance_mm: 20
   side_wall_threshold_mm: 280
   front_wall_threshold_mm: 350
-  front_target_mm: 200
-  emergency_front_mm: 150
+  front_target_mm: 250
+  emergency_front_mm: 200
   front_stop_tolerance_mm: 20
   # A ToF wall stop after halfway can finish a cell despite odometry drift
   front_wall_arrival_min_fraction: 0.5
-  front_deceleration_mm: 150
-  end_deceleration_m: 0.12
+  front_deceleration_mm: 200
+  end_deceleration_m: 0.20
   minimum_forward_speed_mps: 0.08
   minimum_front_speed_mps: 0.05
   timeout_multiplier: 1.8
   timeout_extra_sec: 1.5
   align_duration_sec: 0.3
   align_default_duration_sec: 0.4
-  step_pause_sec: 1.0
-  turn_speed_dps: 90
-  turn_settle_sec: 0.30
+  step_pause_sec: 0.5
+  turn_speed_dps: 75
+  turn_settle_sec: 0.10
+  turn_heading_tolerance_deg: 0.5
   duration_sec: 0
 
 pid:
-  lateral: {kp: 0.0030, ki: 0.0001, kd: 0.0010, max_speed: 0.05, integral_limit: 30}
-  yaw: {kp: 3.0, ki: 0.0, kd: 0.0, max_speed: 90, integral_limit: 20}
+  lateral: {kp: 0.0005, ki: 0.0001, kd: 0.0, max_speed: 0.08, integral_limit: 30}
+  yaw: {kp: 1.8, ki: 0.05, kd: 0.15, max_speed: 35, integral_limit: 20}
 
 telemetry:
   buffer_capacity: 30000

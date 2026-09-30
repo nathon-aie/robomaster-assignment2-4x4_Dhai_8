@@ -47,6 +47,7 @@ class RobotControllerThread(threading.Thread):
         self.grid_size_m = grid_size_m
         self.base_speed = base_speed
         self.target_heading_deg = 0.0
+        self.last_turn_alignment = None
         self.strict_sensors = False
         self.front_ready = False
         self.calibration_manager = None
@@ -301,6 +302,7 @@ class RobotControllerThread(threading.Thread):
         # In DJI SDK: z=+90 rotates CCW (yaw becomes -90°), z=-90 rotates CW (yaw becomes +90°)
         expected_yaw_delta = deg * setting("robot.yaw_command_sign")
         target_heading = (self.target_heading_deg + expected_yaw_delta + 180.0) % 360.0 - 180.0
+        self.last_turn_alignment = None
         self.current_action = f"TURN_{deg:+.0f}_DEG"
         dir_name = "Left (เลี้ยวซ้าย z=+90)" if deg > 0 else ("Right (เลี้ยวขวา z=-90)" if deg < 0 else "Around (กลับหลัง z=180)")
         print(f"\n[Controller] 🔄 Executing Turn {dir_name}: z={deg:+.0f}° -> Target Heading: {target_heading:.0f}°...")
@@ -321,11 +323,14 @@ class RobotControllerThread(threading.Thread):
 
     def align_turn_heading(self, target_heading: float):
         """Correct a completed turn using fresh yaw until the chassis settles on target."""
-        deadline = time.monotonic() + setting("slam.heading_align_timeout_sec")
-        tolerance = setting("slam.heading_tolerance_deg")
+        started = time.monotonic()
+        deadline = started + setting("slam.heading_align_timeout_sec")
+        tolerance = setting("navigation.turn_heading_tolerance_deg")
         # Require feedback received after entering the correction phase.
-        last_attitude_at = time.monotonic()
+        last_attitude_at = started
         within_tolerance = 0
+        correction_count = 0
+        initial_error = None
 
         while time.monotonic() < deadline and self._running.is_set():
             state = self.sensor_hub.get_latest_state()
@@ -340,15 +345,26 @@ class RobotControllerThread(threading.Thread):
             last_attitude_at = state.attitude_received_at
 
             error = (target_heading - state.yaw + 180.0) % 360.0 - 180.0
+            if initial_error is None:
+                initial_error = error
             if abs(error) <= tolerance:
                 self.stop_chassis()
                 within_tolerance += 1
                 if within_tolerance >= 3:
+                    self.last_turn_alignment = {
+                        "target_yaw_deg": target_heading,
+                        "initial_error_deg": initial_error,
+                        "final_error_deg": error,
+                        "correction_count": correction_count,
+                        "elapsed_sec": time.monotonic() - started,
+                    }
                     return state
             else:
                 within_tolerance = 0
-                correction_speed = max(4.0, min(15.0, abs(error) * 1.8))
+                # Slow down near the target so small corrections do not overshoot.
+                correction_speed = max(2.0, min(10.0, abs(error) * 2.0))
                 self.drive_speed(0.0, 0.0, math.copysign(correction_speed, error))
+                correction_count += 1
             time.sleep(0.01)
 
         if not self._running.is_set():
