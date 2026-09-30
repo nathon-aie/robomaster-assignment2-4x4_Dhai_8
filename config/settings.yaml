@@ -24,11 +24,7 @@ sensors:
 
 navigation:
   grid_size_m: 0.60
-<<<<<<< HEAD
-  base_speed_mps: 0.28
-=======
   base_speed_mps: 0.40
->>>>>>> stamp
   step_test_speed_mps: 0.22
   control_rate_hz: 20
   max_heading_error_deg: 15
@@ -51,15 +47,10 @@ navigation:
   align_duration_sec: 0.3
   align_default_duration_sec: 0.4
   step_pause_sec: 1.0
-<<<<<<< HEAD
-  turn_speed_dps: 75
-  turn_settle_sec: 0.30
-=======
   turn_speed_dps: 90
   turn_settle_sec: 0.30
   face_zero_every_cells: 2
   face_zero_tolerance_deg: 5
->>>>>>> stamp
   duration_sec: 0
 
 pid:
