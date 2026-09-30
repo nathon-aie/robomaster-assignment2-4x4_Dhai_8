@@ -244,6 +244,7 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
                                          if target["confirmed"]]
                 for target in confirmed_targets:
                     key = (direction, target["color"], target["shape"])
+                    target["tof_distance_mm"] = distance_mm
                     pending_targets.setdefault(key, []).append(target)
                 if hasattr(explorer.slam, "events"):
                     explorer.slam.events.append({
@@ -281,6 +282,8 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
                     "direction": direction, "color": color, "shape": shape,
                     "yaw": statistics.median(item["yaw"] for item in sightings),
                     "pitch": statistics.median(item["pitch"] for item in sightings),
+                    "tof_distance_mm": statistics.median(
+                        item["tof_distance_mm"] for item in sightings),
                     "confirmed": True,
                 })
             with lock:
@@ -291,7 +294,8 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
                 "targets": [
                     {"direction": target["direction"], "color": target["color"],
                      "shape": target["shape"], "yaw": round(target["yaw"], 2),
-                     "pitch": round(target["pitch"], 2)}
+                     "pitch": round(target["pitch"], 2),
+                     "tof_distance_mm": round(target["tof_distance_mm"], 1)}
                     for target in targets_to_fire
                 ],
             })

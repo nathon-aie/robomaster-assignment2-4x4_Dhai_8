@@ -93,6 +93,10 @@ gimbal:
 fire:
   # Look down while searching and keep the Gimbal tilted down when firing.
   scan_pitch_deg: -20
+  # Camera is approximately 4 cm above the barrel. Positive raises the shot.
+  camera_above_barrel_m: 0.04
+  # Used by the stationary fire test when no wall ToF distance is available.
+  default_target_distance_m: 0.25
   # The SDK acknowledges a burst before all three shots have left the blaster.
   # Hold the Gimbal still this long before aiming at another target.
   burst_hold_sec: 1.0

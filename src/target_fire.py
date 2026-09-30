@@ -39,6 +39,8 @@ class TargetFireController:
         self.center_fraction = setting("fire.center_tolerance_fraction")
         self.yaw_bias_deg = setting("fire.yaw_bias_deg")
         self.pitch_bias_deg = setting("fire.pitch_bias_deg")
+        self.camera_above_barrel_m = setting("fire.camera_above_barrel_m")
+        self.default_target_distance_m = setting("fire.default_target_distance_m")
 
     def _image_angles(self, center, width, height, yaw, pitch):
         x, y = center
@@ -236,6 +238,14 @@ class TargetFireController:
             offset * math.tan(math.radians(self.horizontal_fov_deg / 2))))
         return max(-10.0, min(10.0, angle * 0.65))
 
+    def _barrel_pitch_offset(self, target):
+        distance_mm = target.get("tof_distance_mm")
+        distance_m = (distance_mm / 1000.0 if distance_mm is not None
+                      else self.default_target_distance_m)
+        if distance_m <= 0:
+            distance_m = self.default_target_distance_m
+        return math.degrees(math.atan2(self.camera_above_barrel_m, distance_m)), distance_m
+
     def _wait_for_lock(self, after_seq, target):
         """Confirm the same target in two fresh frames without moving the Gimbal."""
         deadline = time.monotonic() + 2.0
@@ -280,6 +290,8 @@ class TargetFireController:
             self.last_move_error = None
             fire_command_timestamp = None
             burst_hold_sec = 0.0
+            barrel_pitch_offset_deg = 0.0
+            target_distance_m = None
             try:
                 # Use the camera crosshair and target centre to adjust yaw.
                 # Pitch stays at the configured look-down angle.
@@ -309,9 +321,12 @@ class TargetFireController:
                     aim_failure = "yaw_not_centered_after_corrections"
 
                 if locked and not self.stopped.is_set():
-                    if self.yaw_bias_deg or self.pitch_bias_deg:
+                    barrel_pitch_offset_deg, target_distance_m = self._barrel_pitch_offset(target)
+                    if (self.yaw_bias_deg or self.pitch_bias_deg
+                            or barrel_pitch_offset_deg):
                         moved, yaw, pitch, _ = self._move(
-                            yaw + self.yaw_bias_deg, pitch + self.pitch_bias_deg
+                            yaw + self.yaw_bias_deg,
+                            pitch + self.pitch_bias_deg + barrel_pitch_offset_deg
                         )
                     else:
                         moved = True
@@ -354,6 +369,8 @@ class TargetFireController:
                     "shots_requested": SHOTS_PER_TARGET if fire_command_sent else 0,
                     "fire_command_timestamp": fire_command_timestamp,
                     "burst_hold_sec": burst_hold_sec,
+                    "target_distance_m": target_distance_m,
+                    "barrel_pitch_offset_deg": round(barrel_pitch_offset_deg, 2),
                 })
                 if fire_command_sent:
                     # An attempted burst completes this target for the current
