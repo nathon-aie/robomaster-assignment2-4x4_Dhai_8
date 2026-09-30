@@ -23,7 +23,8 @@ WINDOW_TITLE = "RoboMaster - Stationary Fire Test"
 
 
 def run_stationary_fire(conn_type="ap", fire_type="water_fire", cancel=None,
-                        show_camera=True, on_frame=None):
+                        show_camera=True, on_frame=None,
+                        target_color="Red", target_shape="All"):
     """Aim and request three shots per visible target while the chassis stays put."""
     robot_sdk = load_robot_sdk()
     robot = robot_sdk.Robot()
@@ -52,7 +53,10 @@ def run_stationary_fire(conn_type="ap", fire_type="water_fire", cancel=None,
         if camera.start_video_stream(display=False) is False:
             raise RuntimeError("RoboMaster camera stream could not start")
         stream_started = True
-        shooter = TargetFireController(robot, inspection, lock, stopped, fire_type, events)
+        shooter = TargetFireController(
+            robot, inspection, lock, stopped, fire_type, events,
+            target_color=target_color, target_shape=target_shape,
+        )
 
         def read_camera():
             while not reader_stop.is_set() and not stopped.is_set():
@@ -86,6 +90,7 @@ def run_stationary_fire(conn_type="ap", fire_type="water_fire", cancel=None,
         reader.start()
         print("[Fire test] Stationary test: Gimbal looks down, aims and fires; chassis stays put.")
         print("[Fire test] Mode: {}".format(fire_type))
+        print("[Fire test] Target: {} {}".format(target_color, target_shape))
         def scan_and_fire():
             pitch = setting("fire.scan_pitch_deg")
             for yaw in TEST_YAWS_DEG:
@@ -189,6 +194,8 @@ def run_stationary_fire(conn_type="ap", fire_type="water_fire", cancel=None,
             report = {
                 "started_at": report_time.isoformat(),
                 "fire_mode": fire_type,
+                "target_color": target_color,
+                "target_shape": target_shape,
                 "shots_requested": sum(event["shots_requested"] for event in events),
                 "shots_fired": SHOTS_PER_TARGET * sum(event["fired"] for event in events),
                 "targets": events,

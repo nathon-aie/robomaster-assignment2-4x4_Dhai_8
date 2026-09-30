@@ -125,26 +125,33 @@ class RobotSystem:
     def shutdown(self, save_telemetry: bool = True, run_analysis: bool = True):
         """Gracefully shuts down both threads and exports run telemetry."""
         print("\n[RobotSystem] Shutting down multi-threading workers...")
-        if self.thread_2_controller:
-            self.thread_2_controller.stop_running()
-        if self.thread_1_sensor:
-            self.thread_1_sensor.stop_collecting()
+        try:
+            for worker, stop in ((self.thread_2_controller, 'stop_running'),
+                                 (self.thread_1_sensor, 'stop_collecting')):
+                if worker is not None:
+                    try:
+                        getattr(worker, stop)()
+                    except Exception as exc:
+                        print('[RobotSystem] {} warning: {}'.format(stop, exc))
 
-        for worker in (self.thread_2_controller, self.thread_1_sensor):
-            if worker is not None and worker.is_alive():
-                worker.join(timeout=setting("gimbal.action_timeout_sec") + 1)
-        if self.robot is not None:
-            try:
-                cancel_chassis_speed_timer(self.robot.chassis)
-            except Exception as exc:
-                print("[RobotSystem] Chassis timer cleanup warning: {}".format(exc))
-            try:
-                self.robot.close()
-                print("[RobotSystem] RoboMaster SDK connection closed.")
-            except Exception:
-                pass
-
-        if save_telemetry:
-            json_p = self.telemetry.export()
-            if run_analysis:
-                TelemetryAnalyzer.analyze_file(str(json_p), save_plot=True)
+            for worker in (self.thread_2_controller, self.thread_1_sensor):
+                if worker is not None and worker.is_alive():
+                    try:
+                        worker.join(timeout=setting("gimbal.action_timeout_sec") + 1)
+                    except Exception as exc:
+                        print('[RobotSystem] Worker join warning: {}'.format(exc))
+            if self.robot is not None:
+                try:
+                    cancel_chassis_speed_timer(self.robot.chassis)
+                except Exception as exc:
+                    print("[RobotSystem] Chassis timer cleanup warning: {}".format(exc))
+                try:
+                    self.robot.close()
+                    print("[RobotSystem] RoboMaster SDK connection closed.")
+                except Exception as exc:
+                    print('[RobotSystem] SDK close warning: {}'.format(exc))
+        finally:
+            if save_telemetry:
+                json_p = self.telemetry.export()
+                if run_analysis:
+                    TelemetryAnalyzer.analyze_file(str(json_p), save_plot=True)

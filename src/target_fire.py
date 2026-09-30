@@ -12,6 +12,8 @@ FIRE_TYPES = {
     "infrared_fire": "ir",
 }
 SHOTS_PER_TARGET = 3
+TARGET_COLORS = ("Red", "Yellow", "Blue", "Green")
+TARGET_SHAPES = ("Circle", "Square", "Vertical_Rect", "Horizontal_Rect", "All")
 
 
 def fire_type_for_sdk(mode):
@@ -22,7 +24,11 @@ class TargetFireController:
     """The scan worker owns all Gimbal motion; the camera worker supplies sightings."""
 
     def __init__(self, robot, inspection, lock, stopped, mode, events,
-                 pose_provider=None):
+                 pose_provider=None, target_color="Red", target_shape="All"):
+        if target_color not in TARGET_COLORS:
+            raise ValueError("Unsupported target color: {}".format(target_color))
+        if target_shape not in TARGET_SHAPES:
+            raise ValueError("Unsupported target shape: {}".format(target_shape))
         self.robot = robot
         self.inspection = inspection
         self.lock = lock
@@ -31,6 +37,8 @@ class TargetFireController:
         self.fire_type = fire_type_for_sdk(mode)
         self.events = events
         self.pose_provider = pose_provider
+        self.target_color = target_color
+        self.target_shape = target_shape
         self.last_move_error = None
         self.fired = []
         # These are initial angle estimates. Fresh images correct the aim below.
@@ -41,6 +49,14 @@ class TargetFireController:
         self.pitch_bias_deg = setting("fire.pitch_bias_deg")
         self.camera_above_barrel_m = setting("fire.camera_above_barrel_m")
         self.default_target_distance_m = setting("fire.default_target_distance_m")
+
+    def matches_target(self, target):
+        return (target["color"] == self.target_color
+                and (self.target_shape == "All" or target["shape"] == self.target_shape))
+
+    def _matches_sighting(self, target, sighting):
+        return (sighting["color"] == target["color"]
+                and (self.target_shape == "All" or sighting["shape"] == target["shape"]))
 
     def _image_angles(self, center, width, height, yaw, pitch):
         x, y = center
@@ -215,7 +231,7 @@ class TargetFireController:
                 # The same colored sign can be classified as another shape
                 # after it moves from the edge to the middle of the image.
                 matches = [item for item in observations
-                           if item["color"] == target["color"]]
+                           if self._matches_sighting(target, item)]
                 if matches:
                     return min(matches, key=lambda item:
                                abs(item["yaw"] - target["yaw"])
@@ -259,7 +275,7 @@ class TargetFireController:
                 continue
             after_seq = seq
             matches = [item for item in observations
-                       if item["color"] == target["color"]]
+                       if self._matches_sighting(target, item)]
             sighting = min(matches, key=lambda item:
                            abs(item["yaw"] - target["yaw"])
                            + 0.2 * abs(item["pitch"] - target["pitch"])
@@ -273,7 +289,7 @@ class TargetFireController:
     def fire_confirmed(self, cell, direction):
         with self.lock:
             targets = [dict(item) for item in self.inspection.get("targets", [])
-                       if item["confirmed"]]
+                       if item["confirmed"] and self.matches_target(item)]
         for target in sorted(targets, key=lambda item: item["yaw"]):
             if self.stopped.is_set():
                 break

@@ -169,23 +169,41 @@ def save_events_csv(events, output):
     return path
 
 
-def save_report(map_file):
+def _load_telemetry(map_path):
+    """Find the telemetry JSON beside either a plain SLAM or camera mission map."""
+    preferred_stem = (map_path.stem[:-4] if map_path.stem.endswith('_map')
+                      else map_path.stem)
+    preferred = map_path.with_name(preferred_stem + '.json')
+    candidates = [preferred] + sorted(map_path.parent.glob('*.json'))
+    seen = set()
+    for candidate in candidates:
+        if candidate == map_path or candidate in seen or not candidate.is_file():
+            continue
+        seen.add(candidate)
+        try:
+            data = json.loads(candidate.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get('records'), list):
+            return data
+    return {}
+
+
+def render_map_image(map_file):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Circle, Patch, Rectangle
     path = Path(map_file)
     data = json.loads(path.read_text(encoding='utf-8'))
-    telemetry_file = path.with_name((path.stem[:-4] if path.stem.endswith('_map') else path.stem) + '.json')
     duration_label = 'Elapsed: unavailable'
     duration = None
-    records = []
-    if telemetry_file.is_file():
-        telemetry = json.loads(telemetry_file.read_text(encoding='utf-8'))
-        records = telemetry.get('records', [])
-        duration = telemetry.get('duration_sec')
-        if isinstance(duration, (int, float)) and math.isfinite(duration) and duration >= 0:
-            minutes, seconds = divmod(round(duration), 60)
-            duration_label = 'Elapsed: {:.2f} min ({} min {:02d} s)'.format(duration / 60, minutes, seconds)
+    telemetry = _load_telemetry(path)
+    records = telemetry.get('records', [])
+    duration = telemetry.get('duration_sec')
+    if isinstance(duration, (int, float)) and math.isfinite(duration) and duration >= 0:
+        minutes, seconds = divmod(round(duration), 60)
+        duration_label = 'Elapsed: {:.2f} min ({} min {:02d} s)'.format(duration / 60, minutes, seconds)
     size = data['cell_size_m']
     start_cell = data.get('start_cell', [0, 0])
     end_cell = data.get('cell', start_cell)
@@ -214,8 +232,8 @@ def save_report(map_file):
     for row, column in data['visited']:
         fill = '#e5f4e8' if [row, column] == start_cell else (
             '#fbe9eb' if [row, column] == end_cell else '#f5f8fa')
-        axis.add_patch(plt.Rectangle(((column - 0.5) * size, (row - 0.5) * size), size, size,
-                                     facecolor=fill, edgecolor='#d6dee3', linewidth=0.5))
+        axis.add_patch(Rectangle(((column - 0.5) * size, (row - 0.5) * size), size, size,
+                                 facecolor=fill, edgecolor='#d6dee3', linewidth=0.5))
     for edge in data['edges']:
         if not edge['wall']:
             continue
@@ -228,15 +246,49 @@ def save_report(map_file):
             axis.plot([column, column], [row - size / 2, row + size / 2],
                       color='#20252b', linewidth=3, zorder=4)
 
+    # Keep the camera mission's colored signs visible on the same route map.
+    sign_colors = {'Red': '#e3423a', 'Yellow': '#e2bd00',
+                   'Blue': '#2776c9', 'Green': '#28a765'}
+    shown_sign_colors = set()
+    for sign in data.get('signs', []):
+        row, column = sign['cell']
+        direction = sign.get('direction')
+        if direction not in NAMES:
+            continue
+        offset = size * 0.34
+        dx, dy = {'N': (0, offset), 'E': (offset, 0),
+                  'S': (0, -offset), 'W': (-offset, 0)}[direction]
+        x, y = column * size + dx, row * size + dy
+        color = sign_colors.get(sign['color'], '#8b5fbf')
+        shape = sign['shape']
+        if shape == 'Circle':
+            marker = Circle((x, y), size * 0.065)
+        else:
+            width = size * (0.16 if shape == 'Horizontal_Rect' else 0.11)
+            height = size * (0.16 if shape == 'Vertical_Rect' else 0.11)
+            marker = Rectangle((x - width / 2, y - height / 2), width, height)
+        marker.set_facecolor(color)
+        marker.set_edgecolor('#14212b')
+        marker.set_linewidth(1.2)
+        marker.set_zorder(8)
+        axis.add_patch(marker)
+        shown_sign_colors.add(sign['color'])
+
     axis.plot([point[0] for point in planned_xy], [point[1] for point in planned_xy],
               '--o', color='#087cf5', markersize=3, linewidth=1.7,
-              label='Exploration route (cell centres)', zorder=5)
+              label='Planned path (cell centres)', zorder=5)
     if actual_xy:
         axis.plot([point[0] for point in actual_xy], [point[1] for point in actual_xy],
-                  color='#ff4048', linewidth=1.5, label='Actual odometry', zorder=6)
+                  color='#ff4048', linewidth=1.8, label='Actual trajectory (odometry)', zorder=6)
         axis.scatter(*actual_xy[-1], marker='*', color='#e02e39', edgecolor='#20252b',
                      s=120, label='Last recorded odometry' if actual_incomplete else 'Actual end',
                      zorder=9)
+    elif data.get('trajectory'):
+        poses = [point['pose'] for point in data['trajectory']]
+        axis.plot([pose[1] for pose in poses], [pose[0] for pose in poses],
+                  color='#ff4048', linewidth=1.8, label='Estimated trajectory (SLAM)', zorder=6)
+        axis.scatter(poses[-1][1], poses[-1][0], marker='*', color='#e02e39',
+                     edgecolor='#20252b', s=120, label='Estimated end (SLAM)', zorder=9)
     axis.scatter(start_cell[1] * size, start_cell[0] * size, marker='o',
                  facecolor='#30b45a', edgecolor='#174d2b', s=100,
                  label='Start {}'.format(tuple(start_cell)), zorder=10)
@@ -272,18 +324,30 @@ def save_report(map_file):
     axis.set_aspect('equal')
     axis.set_xlabel('Column (increases right)')
     axis.set_ylabel('Row (increases upward)')
-    axis.set_title('RoboMaster EP: trajectory overlay | {} | {} cells\n{}'.format(
-        data['status'], len(data['visited']), duration_label))
-    axis.legend(loc='upper right', fontsize=8, framealpha=0.95)
+    axis.set_title('RoboMaster EP: trajectory overlay on map | {}\n{} | {} cells | {}'.format(
+        path.parent.name, data['status'], len(data['visited']), duration_label))
+    handles, labels = axis.get_legend_handles_labels()
+    for color_name in sorted(shown_sign_colors):
+        handles.append(Patch(facecolor=sign_colors.get(color_name, '#8b5fbf'),
+                             edgecolor='#14212b'))
+        labels.append('{} target'.format(color_name))
+    axis.legend(handles, labels, loc='upper right', fontsize=8, framealpha=0.95)
     axis.grid(which='minor', color='#c7d0d8', linewidth=0.7, alpha=0.7)
     if actual_incomplete:
         axis.text(0.5, -0.09, 'Odometry trace ends before the exploration finishes (telemetry buffer full).',
                   transform=axis.transAxes, ha='center', fontsize=9, color='#9a3412')
 
     figure.tight_layout()
-    actions = save_actions_html(data, path.parent / 'actions.html')
-    save_events_csv(data['events'], path.parent / 'events.csv')
     plot = path.parent / 'map.png'
     figure.savefig(str(plot), dpi=160)
     plt.close(figure)
+    return plot
+
+
+def save_report(map_file):
+    path = Path(map_file)
+    data = json.loads(path.read_text(encoding='utf-8'))
+    plot = render_map_image(path)
+    actions = save_actions_html(data, path.parent / 'actions.html')
+    save_events_csv(data['events'], path.parent / 'events.csv')
     return plot, actions

@@ -277,6 +277,7 @@ class FrontierExplorer:
     def run(self):
         self.status = 'running'
         try:
+            self.slam.export(self.output, self.status)
             while True:
                 cell = self.slam.cell
                 if cell in self.slam.map.visited:
@@ -347,6 +348,7 @@ class FrontierExplorer:
                         'stop_distance_mm': exc.stop_distance_mm,
                         'action': 'edge_closed_and_replan',
                     })
+                    self.slam.export(self.output, self.status)
                     continue
                 self.slam.events.append({'timestamp': time.time(), 'type': 'move',
                     'from': list(cell), 'to': list(target), 'direction': direction,
@@ -354,6 +356,7 @@ class FrontierExplorer:
                 self.slam.predict(target, displacement, yaw)
                 self.slam.heading = direction
                 self.moves += 1
+                self.slam.export(self.output, self.status)
                 interval = setting('navigation.heading_realign_every_cells')
                 if (interval > 0 and self.moves % interval == 0
                         and hasattr(self.backend, 'face_zero')):
