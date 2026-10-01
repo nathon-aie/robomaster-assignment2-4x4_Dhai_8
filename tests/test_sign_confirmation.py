@@ -28,12 +28,19 @@ class SignConfirmationTests(unittest.TestCase):
         for color in ("Red", "Yellow", "Blue", "Green"):
             self.assertTrue(controller.matches_target(
                 {"color": color, "shape": "Circle"}))
-        self.assertFalse(controller._matches_sighting(
-            {"color": "Red", "shape": "Circle"},
-            {"color": "Blue", "shape": "Circle"}))
-        self.assertFalse(controller._matches_sighting(
-            {"color": "Red", "shape": "Circle"},
+        controller.target_shape = "Circle"
+        self.assertFalse(controller.matches_target(
             {"color": "Red", "shape": "Square"}))
+        controller.target_shape = "All"
+        self.assertFalse(controller._matches_sighting(
+            {"color": "Red", "shape": "Circle", "yaw": 10, "pitch": -20},
+            {"color": "Blue", "shape": "Circle", "yaw": 10, "pitch": -20}))
+        self.assertTrue(controller._matches_sighting(
+            {"color": "Red", "shape": "Circle", "yaw": 10, "pitch": -20},
+            {"color": "Red", "shape": "Square", "yaw": 12, "pitch": -21}))
+        self.assertFalse(controller._matches_sighting(
+            {"color": "Red", "shape": "Circle", "yaw": 10, "pitch": -20},
+            {"color": "Red", "shape": "Square", "yaw": 30, "pitch": -21}))
 
     def test_position_jump_missing_frame_and_gimbal_move_restart_streak(self):
         tracker = SignConfirmationTracker()

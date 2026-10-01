@@ -32,9 +32,9 @@ navigation:
   nominal_side_mm: 150
   tolerance_mm: 20
   side_wall_threshold_mm: 220
-  front_wall_threshold_mm: 250
-  front_target_mm: 225
-  emergency_front_mm: 200
+  front_wall_threshold_mm: 200
+  front_target_mm: 175
+  emergency_front_mm: 150
   front_stop_tolerance_mm: 20
   # Stop immediately on a close ToF reading, then verify with fresh packets.
   obstacle_recheck_timeout_sec: 0.5

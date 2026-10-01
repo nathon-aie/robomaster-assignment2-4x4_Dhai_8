@@ -55,8 +55,15 @@ class TargetFireController:
                 and (self.target_shape == "All" or target["shape"] == self.target_shape))
 
     def _matches_sighting(self, target, sighting):
-        return (sighting["color"] == target["color"]
-                and sighting["shape"] == target["shape"])
+        if sighting["color"] != target["color"]:
+            return False
+        if sighting["shape"] == target["shape"]:
+            return True
+        # A plate near the image edge can be classified as another shape once
+        # the Gimbal centres it. Keep that sighting only if its map bearing is
+        # still close to the already confirmed target.
+        return (abs(sighting["yaw"] - target["yaw"]) < 8
+                and abs(sighting["pitch"] - target["pitch"]) < 8)
 
     def _image_angles(self, center, width, height, yaw, pitch):
         x, y = center

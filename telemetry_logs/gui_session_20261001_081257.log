@@ -1,0 +1,132 @@
+[RobotSystem] Connecting to RoboMaster EP via AP...
+[RobotSystem] Successfully connected to RoboMaster EP!
+Front-wall stopping target: 220 mm (plus configured stop tolerance).
+[Thread 1 Sensor] Auto-Locked Initial Heading: -0.49° -> 0.0°
+[Thread 1 Sensor] Auto-Locked Initial Position: (0.000, 0.000) -> (0.000, 0.000)
+Camera is live. Use the GUI Stop button to end the mission.
+[Sign scan] Nearby W wall at 242 mm
+Inspecting W wall in cell (0, 0) at yaw [-90.0, -108.0, -72.0] for 5.4s...
+[Sign scan] Nearby S wall at 237 mm
+Inspecting S wall in cell (0, 0) at yaw [-180.0, -198.0, -162.0] for 5.4s...
+
+  [Grid Step 1/1] Moving 1 cell forward (0.60 m)...
+  [PID Centering] Case 2.2: No Front Wall + Left Wall Only (L +- 2cm) | Lat Err: -37.7 mm | vy: -0.02 m/s | L: 187.69243191029642 mm | R: 373.34723268361154 mm
+  [PID Centering] Case 1.2: Front Wall + Left Wall Only (L +- 2cm) | Lat Err: -40.3 mm | vy: -0.02 m/s | L: 190.34089580531207 mm | R: 376.9902072196183 mm
+  [Grid Step 1/1 Done] Local Pos: (+0.53m, -0.02m) | Yaw: -0.3° | Sharp L: 190.34471920571661 mm | R: 376.99614905258187 mm | Diff: N/A | ToF: 230.0 mm
+[Sign scan] Nearby W wall at 230 mm
+Inspecting W wall in cell (1, 0) at yaw [-90.0, -108.0, -72.0] for 5.4s...
+[Sign scan] Nearby N wall at 246 mm
+Inspecting N wall in cell (1, 0) at yaw [0.0, -18.0, 18.0] for 5.4s...
+
+[Controller] 🔄 Executing Turn Right (เลี้ยวขวา z=-90): z=-90° -> Target Heading: 90°...
+[Controller] ✅ Turn Completed: Current Yaw = +89.1° (Target Grid Heading = 90°)
+
+
+  [Grid Step 1/1] Moving 1 cell forward (0.60 m)...
+  [PID Centering] Case 2.2: No Front Wall + Left Wall Only (L +- 2cm) | Lat Err: -53.6 mm | vy: -0.03 m/s | L: 203.62891544955707 mm | R: 351.49162732180605 mm
+  [PID Centering] Case 2.4: Open Space (No Side Walls) | Lat Err: +0.0 mm | vy: +0.00 m/s | L: 224.63077840830195 mm | R: 360.78126194720187 mm
+  [Grid Step 1/1 Done] Local Pos: (+0.57m, +0.59m) | Yaw: +89.6° | Sharp L: 253.55630664701326 mm | R: 331.64720013913495 mm | Diff: N/A | ToF: 2717.0 mm
+
+[Controller] 🔄 Executing Turn Left (เลี้ยวซ้าย z=+90): z=+90° -> Target Heading: 0°...
+[Controller] ✅ Turn Completed: Current Yaw = +0.6° (Target Grid Heading = 0°)
+
+
+[Controller] 🔄 Executing Turn Right (เลี้ยวขวา z=-90): z=-90° -> Target Heading: 90°...
+[Controller] ✅ Turn Completed: Current Yaw = +89.4° (Target Grid Heading = 90°)
+
+
+[Controller] 🔄 Executing Turn Left (เลี้ยวซ้าย z=+90): z=+90° -> Target Heading: 0°...
+[Controller] ✅ Turn Completed: Current Yaw = +0.0° (Target Grid Heading = 0°)
+
+
+  [Grid Step 1/1] Moving 1 cell forward (0.60 m)...
+  [PID Centering] Case 2.4: Open Space (No Side Walls) | Lat Err: +0.0 mm | vy: +0.00 m/s | L: 298.6612661266592 mm | R: 245.24609936513554 mm
+  [PID Centering] Case 2.3: No Front Wall + Right Wall Only (R +- 2cm) | Lat Err: +42.9 mm | vy: +0.02 m/s | L: 239.8844359269377 mm | R: 192.8612193136439 mm
+  [PID Centering] Case 2.1: No Front Wall + Both Side Walls (|L-R| < 2cm) | Lat Err: -52.6 mm | vy: -0.03 m/s | L: 210.95123228369192 mm | R: 158.33334161920237 mm
+  [Grid Step 1/1 Done] Local Pos: (+1.19m, +0.56m) | Yaw: -0.1° | Sharp L: 133.68421880555758 mm | R: 115.26794218884709 mm | Diff: +18.4 mm | ToF: 2795.0 mm
+[Sign scan] Nearby W wall at 179 mm
+Inspecting W wall in cell (2, 1) at yaw [-90.0, -108.0, -72.0] for 5.4s...
+[Sign scan] Nearby E wall at 205 mm
+Inspecting E wall in cell (2, 1) at yaw [90.0, 72.0, 108.0] for 5.4s...
+
+  [Grid Step 1/1] Moving 1 cell forward (0.60 m)...
+  [PID Centering] Case 2.1: No Front Wall + Both Side Walls (|L-R| < 2cm) | Lat Err: +15.8 mm | vy: +0.00 m/s | L: 119.94720830236122 mm | R: 135.7286546504484 mm
+  [PID Centering] Case 2.4: Open Space (No Side Walls) | Lat Err: +0.0 mm | vy: +0.00 m/s | L: 235.1436339858288 mm | R: 227.20072613868587 mm
+  [Grid Step 1/1 Done] Local Pos: (+1.81m, +0.59m) | Yaw: -0.3° | Sharp L: 306.8818662918876 mm | R: 234.93905940781713 mm | Diff: N/A | ToF: 1874.0 mm
+
+  [Grid Step 1/1] Moving 1 cell forward (0.60 m)...
+  [PID Centering] Case 2.4: Open Space (No Side Walls) | Lat Err: +0.0 mm | vy: +0.00 m/s | L: 366.42728139485985 mm | R: 244.32867358411406 mm
+  [PID Centering] Case 2.3: No Front Wall + Right Wall Only (R +- 2cm) | Lat Err: +44.8 mm | vy: +0.02 m/s | L: 300.8385331541152 mm | R: 194.81863745832678 mm
+  [PID Centering] Case 2.1: No Front Wall + Both Side Walls (|L-R| < 2cm) | Lat Err: -99.0 mm | vy: -0.04 m/s | L: 217.13257422715327 mm | R: 118.11332404284951 mm
+  [Grid Step 1/1 Done] Local Pos: (+2.43m, +0.57m) | Yaw: -0.0° | Sharp L: 203.3501050389534 mm | R: 118.76756204585644 mm | Diff: +84.6 mm | ToF: 1009.0 mm
+[Sign scan] Nearby W wall at 240 mm
+Inspecting W wall in cell (4, 1) at yaw [-90.0, -108.0, -72.0] for 5.4s...
+[Sign scan] Nearby E wall at 210 mm
+Inspecting E wall in cell (4, 1) at yaw [90.0, 72.0, 108.0] for 5.4s...
+
+  [Grid Step 1/1] Moving 1 cell forward (0.60 m)...
+  [PID Centering] Case 2.1: No Front Wall + Both Side Walls (|L-R| < 2cm) | Lat Err: -51.3 mm | vy: -0.03 m/s | L: 189.4351694375744 mm | R: 138.12955326175103 mm
+  [PID Centering] Case 2.2: No Front Wall + Left Wall Only (L +- 2cm) | Lat Err: -29.5 mm | vy: -0.02 m/s | L: 179.54633047526 mm | R: 236.19791533966063 mm
+  [Grid Step 1/1 Done] Local Pos: (+3.03m, +0.52m) | Yaw: -0.3° | Sharp L: 157.34650635460952 mm | R: 299.5130425528273 mm | Diff: N/A | ToF: 311.789628988941 mm
+[Sign scan] Nearby W wall at 193 mm
+Inspecting W wall in cell (5, 1) at yaw [-90.0, -108.0, -72.0] for 5.4s...
+[Sign scan] Nearby N wall at 296 mm
+Inspecting N wall in cell (5, 1) at yaw [0.0, -18.0, 18.0] for 5.4s...
+
+[Controller] 🔄 Executing Turn Right (เลี้ยวขวา z=-90): z=-90° -> Target Heading: 90°...
+[Controller] ✅ Turn Completed: Current Yaw = +89.6° (Target Grid Heading = 90°)
+
+
+  [Grid Step 1/1] Moving 1 cell forward (0.60 m)...
+  [PID Centering] Case 2.4: Open Space (No Side Walls) | Lat Err: +0.0 mm | vy: +0.00 m/s | L: 241.80035381019147 mm | R: 232.84806636087558 mm
+  [Grid Step 1/1 Done] Local Pos: (+3.04m, +1.13m) | Yaw: +89.8° | Sharp L: 240.8473192092149 mm | R: 358.1250962649045 mm | Diff: N/A | ToF: 1008.0 mm
+[Sign scan] Nearby N wall at 282 mm
+Inspecting N wall in cell (5, 2) at yaw [-90.0, -108.0, -72.0] for 5.4s...
+
+  [Grid Step 1/1] Moving 1 cell forward (0.60 m)...
+  [PID Centering] Case 2.4: Open Space (No Side Walls) | Lat Err: +0.0 mm | vy: +0.00 m/s | L: 243.01213509337796 mm | R: 348.6658314795315 mm
+  [Grid Step 1/1 Done] Local Pos: (+3.05m, +1.72m) | Yaw: +89.7° | Sharp L: 257.26757596940763 mm | R: 259.306633152421 mm | Diff: N/A | ToF: 292.0 mm
+
+[Controller] 🔄 Executing Turn Left (เลี้ยวซ้าย z=+90): z=+90° -> Target Heading: 0°...
+[Controller] ✅ Turn Completed: Current Yaw = +0.6° (Target Grid Heading = 0°)
+
+
+[Controller] 🔄 Executing Turn Right (เลี้ยวขวา z=-90): z=-90° -> Target Heading: 90°...
+[Controller] ✅ Turn Completed: Current Yaw = +89.6° (Target Grid Heading = 90°)
+
+[Sign scan] Nearby N wall at 328 mm
+Inspecting N wall in cell (5, 3) at yaw [-90.0, -108.0, -72.0] for 5.4s...
+[Sign scan] Nearby E wall at 307 mm
+Inspecting E wall in cell (5, 3) at yaw [0.0, -18.0, 18.0] for 5.4s...
+[Snapshot] Saved target photo 1/3: c5_3_E_Red_Circle_snap1.jpg
+
+[Controller] 🔄 Executing Turn Right (เลี้ยวขวา z=-90): z=-90° -> Target Heading: -180°...
+[Controller] ✅ Turn Completed: Current Yaw = +179.5° (Target Grid Heading = -180°)
+
+
+  [Grid Step 1/1] Moving 1 cell forward (0.60 m)...
+  [PID Centering] Case 2.4: Open Space (No Side Walls) | Lat Err: +0.0 mm | vy: +0.00 m/s | L: 245.1657940412781 mm | R: 331.3038934842572 mm
+  [Grid Step 1/1 Done] Local Pos: (+2.45m, +1.71m) | Yaw: +179.6° | Sharp L: 265.79150575983334 mm | R: 357.30585467341973 mm | Diff: N/A | ToF: 1852.9293616761527 mm
+[Sign scan] Nearby E wall at 348 mm
+Inspecting E wall in cell (4, 3) at yaw [-90.0, -108.0, -72.0] for 5.4s...
+[Snapshot] Saved target photo 1/3: c4_3_E_Red_Circle_snap1.jpg
+[Snapshot] Saved target photo 1/3: c4_3_E_Red_Vertical_Rect_snap1.jpg
+[Snapshot] Saved target photo 1/3: c4_3_E_Red_Vertical_Rect_snap1.jpg
+
+[Controller] 🔄 Executing Turn Left (เลี้ยวซ้าย z=+90): z=+90° -> Target Heading: 90°...
+[Controller] ✅ Turn Completed: Current Yaw = +90.5° (Target Grid Heading = 90°)
+
+
+  [Grid Step 1/1] Moving 1 cell forward (0.60 m)...
+  [PID Centering] Case 2.4: Open Space (No Side Walls) | Lat Err: +0.0 mm | vy: +0.00 m/s | L: 365.9473308335631 mm | R: 277.1682299385571 mm
+  [PID Centering] Case 1.4: Front Wall + No Side Walls | Lat Err: +0.0 mm | vy: +0.00 m/s | L: 373.6623623389688 mm | R: 283.1705548472547 mm
+  [Grid Step 1/1 Done] Local Pos: (+2.45m, +1.83m) | Yaw: +89.4° | Sharp L: 374.6132579033166 mm | R: 284.0019838351716 mm | Diff: N/A | ToF: 231.10692570542264 mm
+Maze exploration failed after 9 move(s), 10 cell(s) visited.
+Map saved to: D:\robomaster-assignment2-4x4_Dhai_8\telemetry_logs\run_detect_20261001_081306_796872\explored_map.json
+[SLAM Error] Cell motion failed: front_wall
+Saved 0 confirmed sign mark(s) to the SLAM map.
+
+[RobotSystem] Shutting down multi-threading workers...
+[RobotSystem] RoboMaster SDK connection closed.
+[TelemetryRecorder] Saved 3155 samples -> D:\robomaster-assignment2-4x4_Dhai_8\telemetry_logs\run_detect_20261001_081306_796872\run_detect_20261001_081306_796872_20261001_081306.json & D:\robomaster-assignment2-4x4_Dhai_8\telemetry_logs\run_detect_20261001_081306_796872\run_detect_20261001_081306_796872_20261001_081306.csv
+[Explore-Detect] 🗺️ บันทึกภาพแผนที่สำเร็จ: D:\robomaster-assignment2-4x4_Dhai_8\telemetry_logs\run_detect_20261001_081306_796872\map.png
