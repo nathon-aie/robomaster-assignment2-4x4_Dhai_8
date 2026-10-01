@@ -504,6 +504,12 @@ class OperationGUI:
                 s_shape = s.get('shape', 'sign')
                 s_dir = s.get('direction', 0)
                 if s_cell and len(s_cell) == 2:
+                    if isinstance(s_dir, str):
+                        if s_dir not in ('N', 'E', 'S', 'W'):
+                            continue
+                        s_dir = 'NESW'.index(s_dir)
+                    elif not isinstance(s_dir, int):
+                        continue
                     cx, cy = center(s_cell)
                     dx, dy = offsets.get(s_dir % 4, (0, 0))
                     dot_color = '#e02424' if 'red' in s_col else ('#1c64f2' if 'blue' in s_col else '#333333')

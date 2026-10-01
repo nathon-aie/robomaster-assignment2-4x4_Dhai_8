@@ -1,0 +1,96 @@
+{
+  "source_map": "/home/nathon/My_Projects/241-251 Robot/Final_Assignment/robomaster-assignment2-4x4_Dhai_8/telemetry_logs/run_detect_20261001_120426_909122/explored_map.json",
+  "start_cell": [
+    0,
+    1
+  ],
+  "route": [
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      2,
+      1
+    ],
+    [
+      2,
+      2
+    ],
+    [
+      2,
+      3
+    ],
+    [
+      2,
+      4
+    ],
+    [
+      2,
+      5
+    ],
+    [
+      3,
+      5
+    ],
+    [
+      4,
+      5
+    ],
+    [
+      5,
+      5
+    ]
+  ],
+  "directions": [
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0
+  ],
+  "target_cells": [
+    [
+      5,
+      5
+    ]
+  ],
+  "targets": [
+    {
+      "color": "Green",
+      "shape": "Square",
+      "cell": [
+        5,
+        5
+      ],
+      "direction": 0,
+      "tof_distances_mm": [
+        248.0
+      ],
+      "confirmed_frames": 3,
+      "captured_images": [
+        "c5_5_N_Green_Square_snap1.jpg",
+        "c5_5_N_Green_Square_snap2.jpg",
+        "c5_5_N_Green_Square_snap3.jpg"
+      ],
+      "tof_distance_mm": 248.0,
+      "last_seen_timestamp": 1790831552.587299
+    }
+  ],
+  "selected": [
+    [
+      "Green",
+      "Square"
+    ]
+  ],
+  "step_count": 9,
+  "cell_size_m": 0.6
+}

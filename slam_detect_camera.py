@@ -1,5 +1,6 @@
 import json
 import math
+import queue
 import statistics
 import threading
 import time
@@ -37,6 +38,7 @@ SIGN_LOOK_DOWN_PITCH_DEG = -20.0
 SIGN_INSPECTION_TIMEOUT_SEC = 5.4
 SIGN_CAMERA_SWEEP_OFFSETS_DEG = (0.0, -18.0, 18.0)
 FRONT_STOP_TARGET_MM = 220.0
+CAMERA_FRAME_TIMEOUT_SEC = 5.0
 
 
 def front_wall_measurement(slam, state, now=None):
@@ -424,6 +426,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
     worker.start()
     announced = False
     window_created = False
+    last_camera_frame_at = time.monotonic()
 
     try:
         print("Camera is live. {}".format(
@@ -431,7 +434,15 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
             if on_frame is not None else "Press 'q' to stop/close the mission window."))
         while True:
             if camera_is_robot:
-                frame = camera.read_cv2_image(strategy="newest", timeout=0.5)
+                try:
+                    frame = camera.read_cv2_image(strategy="newest", timeout=0.5)
+                except queue.Empty:
+                    frame = None
+                if frame is not None:
+                    last_camera_frame_at = time.monotonic()
+                elif worker.is_alive() and time.monotonic() - last_camera_frame_at > CAMERA_FRAME_TIMEOUT_SEC:
+                    raise RuntimeError("Camera video frames stopped arriving for {:.1f}s".format(
+                        CAMERA_FRAME_TIMEOUT_SEC))
             else:
                 ok, frame = camera.read()
                 if not ok:

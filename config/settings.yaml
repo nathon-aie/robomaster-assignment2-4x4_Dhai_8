@@ -33,8 +33,8 @@ navigation:
   tolerance_mm: 20
   side_wall_threshold_mm: 220
   front_wall_threshold_mm: 250
-  front_target_mm: 225
-  emergency_front_mm: 200
+  front_target_mm: 200
+  emergency_front_mm: 155
   front_stop_tolerance_mm: 20
   # Stop immediately on a close ToF reading, then verify with fresh packets.
   obstacle_recheck_timeout_sec: 0.5
@@ -120,7 +120,7 @@ map:
   columns: 6
   start:
     row: 0
-    column: 0
+    column: 1
 
 slam:
   wall_thickness_m: 0.075
@@ -145,8 +145,8 @@ slam:
   motion_variance_m2: 0.0016
   range_variance_m2: 0.0004
   max_pose_std_m: 0.22
-  # Clockwise global directions from initial forward: N, E, S, W
-  direction_order: [0, 1, 2, 3]
+  # Global direction indices: 0=N, 1=E, 2=S, 3=W; tie priority N, S, E, W
+  direction_order: [0, 2, 1, 3]
 
 # Passive chassis motion check during Gimbal scans; does not rotate the chassis.
 scan_guard:

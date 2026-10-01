@@ -1,0 +1,65 @@
+{
+  "status": "completed",
+  "source_map": "/home/nathon/My_Projects/241-251 Robot/Final_Assignment/robomaster-assignment2-4x4_Dhai_8/telemetry_logs/run_detect_20261001_120426_909122/explored_map.json",
+  "route": [
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      2,
+      1
+    ],
+    [
+      2,
+      2
+    ],
+    [
+      2,
+      3
+    ],
+    [
+      2,
+      4
+    ],
+    [
+      2,
+      5
+    ],
+    [
+      3,
+      5
+    ],
+    [
+      4,
+      5
+    ],
+    [
+      5,
+      5
+    ]
+  ],
+  "completed_steps": 9,
+  "current_cell": [
+    5,
+    5
+  ],
+  "targets": [
+    {
+      "cell": [
+        5,
+        5
+      ],
+      "direction": 0,
+      "color": "Green",
+      "shape": "Square",
+      "status": "fired"
+    }
+  ],
+  "error": null,
+  "result_file": "/home/nathon/My_Projects/241-251 Robot/Final_Assignment/robomaster-assignment2-4x4_Dhai_8/telemetry_logs/navigate_20261001_121802_216461/navigation_result.json"
+}

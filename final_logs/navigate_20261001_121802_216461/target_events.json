@@ -1,0 +1,92 @@
+[
+  {
+    "timestamp": 1790831915.3568666,
+    "type": "target_gimbal_move",
+    "phase": "lift",
+    "requested_yaw": 0.0,
+    "requested_pitch": 0,
+    "succeeded": true,
+    "action_state": "action_succeeded",
+    "reason": "None",
+    "actual_yaw": 0.2,
+    "actual_pitch": -2.6
+  },
+  {
+    "timestamp": 1790831915.5584624,
+    "type": "target_gimbal_move",
+    "phase": "turn",
+    "requested_yaw": -15.24,
+    "requested_pitch": 0,
+    "succeeded": true,
+    "action_state": "action_succeeded",
+    "reason": "None",
+    "actual_yaw": -10.8,
+    "actual_pitch": 2.3
+  },
+  {
+    "timestamp": 1790831915.956886,
+    "type": "target_gimbal_move",
+    "phase": "aim",
+    "requested_yaw": -15.24,
+    "requested_pitch": -20.0,
+    "succeeded": true,
+    "action_state": "action_succeeded",
+    "reason": "None",
+    "actual_yaw": -15.0,
+    "actual_pitch": -16.1
+  },
+  {
+    "timestamp": 1790831916.4560661,
+    "type": "target_gimbal_move",
+    "phase": "aim",
+    "requested_yaw": -5.24,
+    "requested_pitch": -20.0,
+    "succeeded": true,
+    "action_state": "action_succeeded",
+    "reason": "None",
+    "actual_yaw": -10.6,
+    "actual_pitch": -18.1
+  },
+  {
+    "timestamp": 1790831917.0552926,
+    "type": "target_gimbal_move",
+    "phase": "aim",
+    "requested_yaw": -5.24,
+    "requested_pitch": -9.79,
+    "succeeded": true,
+    "action_state": "action_succeeded",
+    "reason": "None",
+    "actual_yaw": -5.3,
+    "actual_pitch": -12.5
+  },
+  {
+    "timestamp": 1790831918.3362598,
+    "type": "target_fire",
+    "cell": [
+      5,
+      5
+    ],
+    "direction": 0,
+    "color": "Green",
+    "shape": "Square",
+    "fire_mode": "water_fire",
+    "yaw": -5.24,
+    "pitch": -9.79,
+    "locked": true,
+    "fired": true,
+    "aim_moves": 2,
+    "aim_error_px": -28.0,
+    "aim_failure": null,
+    "visible_labels": [
+      "Green Square"
+    ],
+    "actual_yaw": -5.3,
+    "actual_pitch": -8.0,
+    "fire_commands_sent": 1,
+    "shots_requested": 3,
+    "fire_command_timestamp": 1790831917.3056676,
+    "burst_hold_sec": 1.0,
+    "target_distance_m": 0.222,
+    "barrel_pitch_offset_deg": 10.21
+  }
+]
