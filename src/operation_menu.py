@@ -14,7 +14,8 @@ from .settings import get as setting, map_geometry, project_path
 
 
 TARGET_COLOR_OPTIONS = (('แดง', 'Red'), ('เหลือง', 'Yellow'),
-                        ('น้ำเงิน', 'Blue'), ('เขียว', 'Green'))
+                        ('น้ำเงิน', 'Blue'), ('เขียว', 'Green'),
+                        ('ทุกสี (4 สี)', 'All'))
 TARGET_SHAPE_OPTIONS = (('วงกลม', 'Circle'), ('สี่เหลี่ยมจตุรัส', 'Square'),
                         ('สี่เหลี่ยมผืนผ้าแนวตั้ง', 'Vertical_Rect'),
                         ('สี่เหลี่ยมผืนผ้าแนวนอน', 'Horizontal_Rect'),
@@ -108,6 +109,11 @@ class OperationGUI:
             style.theme_use('clam')
         except Exception:
             pass
+        style.configure('Stop.TButton', foreground='white', background='#b91c1c',
+                        font=('', 11, 'bold'), padding=8)
+        style.map('Stop.TButton', background=[('disabled', '#d1d5db'),
+                                              ('active', '#991b1b')],
+                  foreground=[('disabled', '#666666')])
         
         outer = ttk.Frame(self.root, padding=12)
         outer.pack(fill='both', expand=True)
@@ -167,6 +173,12 @@ class OperationGUI:
         )
         self.start_explore_btn.pack(fill='x', ipady=4, pady=(0, 4))
 
+        self.stop_button = ttk.Button(
+            mission_box, text='หยุดการทำงาน', style='Stop.TButton',
+            command=self._stop, state='disabled',
+        )
+        self.stop_button.pack(fill='x', pady=(0, 4))
+
         self.direct_explore_btn = ttk.Button(
             mission_box,
             text='ปิด GUI แล้วเริ่มสำรวจและยิง',
@@ -213,8 +225,6 @@ class OperationGUI:
         self.status = tk.StringVar(value='พร้อมทำงาน')
         ttk.Label(ctrl_box, textvariable=self.status, font=('', 10, 'italic'), wraplength=280).pack(anchor='w', pady=(0, 6))
 
-        self.stop_button = ttk.Button(ctrl_box, text='🛑 หยุดงาน (Stop)', command=self._stop, state='disabled')
-        self.stop_button.pack(fill='x', ipady=3)
         ttk.Label(ctrl_box, text='Esc: ออกจากเต็มจอ   F11: สลับเต็มจอ').pack(anchor='w', pady=(5, 0))
 
         # ---------------- Right Side: Live SLAM Map and Camera ----------------
@@ -312,6 +322,7 @@ class OperationGUI:
     def _stop(self):
         if self.control is not None:
             self.status.set('กำลังหยุดงาน...')
+            self.stop_button.configure(text='กำลังหยุด...', state='disabled')
             self.control.stop()
 
     def _toggle_fullscreen(self, _event=None):
@@ -420,6 +431,7 @@ class OperationGUI:
                         self._close_fire_preview()
                     self.status.set('{}: {}'.format(task, 'เสร็จสมบูรณ์' if result == 0 else 'หยุด/ไม่สำเร็จ'))
                     self.stop_button.configure(state='disabled')
+                    self.stop_button.configure(text='หยุดการทำงาน')
                     for button in self.task_buttons:
                         button.configure(state='normal')
                     self.control = None

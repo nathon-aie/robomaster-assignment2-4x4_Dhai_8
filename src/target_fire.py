@@ -12,7 +12,7 @@ FIRE_TYPES = {
     "infrared_fire": "ir",
 }
 SHOTS_PER_TARGET = 3
-TARGET_COLORS = ("Red", "Yellow", "Blue", "Green")
+TARGET_COLORS = ("Red", "Yellow", "Blue", "Green", "All")
 TARGET_SHAPES = ("Circle", "Square", "Vertical_Rect", "Horizontal_Rect", "All")
 
 
@@ -51,12 +51,12 @@ class TargetFireController:
         self.default_target_distance_m = setting("fire.default_target_distance_m")
 
     def matches_target(self, target):
-        return (target["color"] == self.target_color
+        return ((self.target_color == "All" or target["color"] == self.target_color)
                 and (self.target_shape == "All" or target["shape"] == self.target_shape))
 
     def _matches_sighting(self, target, sighting):
         return (sighting["color"] == target["color"]
-                and (self.target_shape == "All" or sighting["shape"] == target["shape"]))
+                and sighting["shape"] == target["shape"])
 
     def _image_angles(self, center, width, height, yaw, pitch):
         x, y = center
@@ -118,9 +118,10 @@ class TargetFireController:
                         "seen": 1, "last_seq": seq, "confirmed": False,
                     })
                 matched.add(index)
+            tracks[:] = [track for track in tracks if track["last_seq"] == seq]
 
     def confirm_detection(self, detection):
-        """Use the sign mapper's three-frame confirmation for this visible target."""
+        """Confirm only a track that was stable in three fresh camera frames."""
         with self.lock:
             if not self.inspection.get("active") or self.inspection.get("phase") != "survey":
                 return
@@ -133,24 +134,15 @@ class TargetFireController:
                 return
             observation = matching[0]
             tracks = self.inspection.setdefault("targets", [])
-            candidates = [
-                (abs(track["yaw"] - observation["yaw"])
-                 + abs(track["pitch"] - observation["pitch"]), track)
-                for track in tracks
-                if track["color"] == observation["color"]
-                and track["shape"] == observation["shape"]
-            ]
-            if candidates:
-                error, track = min(candidates, key=lambda item: item[0])
-                if error < 10:
+            for track in tracks:
+                if (track["color"] == observation["color"]
+                        and track["shape"] == observation["shape"]
+                        and track["last_seq"] == self.inspection["frame_seq"]
+                        and track["seen"] >= 3
+                        and abs(track["yaw"] - observation["yaw"]) < 5
+                        and abs(track["pitch"] - observation["pitch"]) < 6):
                     track["confirmed"] = True
                     return
-            tracks.append({
-                "color": observation["color"], "shape": observation["shape"],
-                "yaw": observation["yaw"], "pitch": observation["pitch"],
-                "seen": 3, "last_seq": self.inspection["frame_seq"],
-                "confirmed": True,
-            })
 
     def _already_fired(self, cell, direction, target):
         return any(

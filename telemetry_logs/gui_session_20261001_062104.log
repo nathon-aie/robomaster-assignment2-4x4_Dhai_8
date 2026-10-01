@@ -1,0 +1,33 @@
+[RobotSystem] Connecting to RoboMaster EP via AP...
+2026-10-01 06:21:14,766 ERROR conn.py:271 SdkConnection: RECV TimeOut!
+2026-10-01 06:21:14,766 ERROR robot.py:1353 Robot: Connection Failed, Please Check Hareware Connections!!! conn_type ap, host ('0.0.0.0', 10347), target ('192.168.2.1', 20020).
+2026-10-01 06:21:14,766 ERROR client.py:70 Client: __init__, create Connection, exception: module 'robomaster.config' has no attribute 'DEFAULT_CONN_PROTO'
+2026-10-01 06:21:14,767 ERROR client.py:153 Client: send_sync_msg, client recv_task is not running.
+2026-10-01 06:21:14,767 ERROR client.py:153 Client: send_sync_msg, client recv_task is not running.
+2026-10-01 06:21:14,767 ERROR client.py:153 Client: send_sync_msg, client recv_task is not running.
+2026-10-01 06:21:14,769 ERROR client.py:153 Client: send_sync_msg, client recv_task is not running.
+2026-10-01 06:21:14,769 ERROR client.py:153 Client: send_sync_msg, client recv_task is not running.
+Robot: Can not connect to robot, check connection please.
+[RobotSystem] Connection failed: เชื่อมต่อ RoboMaster ไม่สำเร็จ (ap): exceptions must derive from BaseException. ตรวจเครือข่ายของหุ่นและ robot.conn_type ใน config/settings.yaml
+[RobotSystem] Cleanup warning: 'NoneType' object has no attribute 'is_alive'
+
+[RobotSystem] Shutting down multi-threading workers...
+[TelemetryRecorder] Saved 0 samples -> D:\robomaster-assignment2-4x4_Dhai_8\telemetry_logs\run_detect_20261001_062109_716242\run_detect_20261001_062109_716242_20261001_062109.json & D:\robomaster-assignment2-4x4_Dhai_8\telemetry_logs\run_detect_20261001_062109_716242\run_detect_20261001_062109_716242_20261001_062109.csv
+[Explore-Detect] failed: Could not connect to RoboMaster EP; refusing to use mock mode
+Exception ignored in: <function Robot.__del__ at 0x000001C9AFAFD670>
+Traceback (most recent call last):
+  File "D:\robomaster-assignment2-4x4_Dhai_8\.venv\lib\site-packages\robomaster\robot.py", line 1118, in __del__
+    self.close()
+  File "D:\robomaster-assignment2-4x4_Dhai_8\.venv\lib\site-packages\robomaster\robot.py", line 1344, in close
+    self._client.stop()
+  File "D:\robomaster-assignment2-4x4_Dhai_8\.venv\lib\site-packages\robomaster\client.py", line 132, in stop
+    if self._thread.is_alive():
+AttributeError: 'NoneType' object has no attribute 'is_alive'
+Exception ignored in: <function Client.__del__ at 0x000001C9AD6FB9D0>
+Traceback (most recent call last):
+  File "D:\robomaster-assignment2-4x4_Dhai_8\.venv\lib\site-packages\robomaster\client.py", line 88, in __del__
+    self.stop()
+  File "D:\robomaster-assignment2-4x4_Dhai_8\.venv\lib\site-packages\robomaster\client.py", line 132, in stop
+    if self._thread.is_alive():
+AttributeError: 'NoneType' object has no attribute 'is_alive'
+[Explore-Detect] 🗺️ บันทึกภาพแผนที่สำเร็จ: D:\robomaster-assignment2-4x4_Dhai_8\telemetry_logs\run_detect_20261001_062109_716242\map.png

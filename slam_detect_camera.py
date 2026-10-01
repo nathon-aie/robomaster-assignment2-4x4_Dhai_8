@@ -37,6 +37,62 @@ SIGN_LOOK_DOWN_PITCH_DEG = -20.0
 SIGN_INSPECTION_TIMEOUT_SEC = 5.4
 SIGN_CAMERA_SWEEP_OFFSETS_DEG = (0.0, -18.0, 18.0)
 FRONT_STOP_TARGET_MM = 220.0
+SIGN_TRACK_TOLERANCE_DEG = 3.0
+
+
+class SignConfirmationTracker:
+    """Count consecutive sightings of the same sign at one settled camera pose."""
+
+    def __init__(self):
+        self.context = None
+        self.tracks = {}
+
+    def reset(self):
+        self.context = None
+        self.tracks.clear()
+
+    @staticmethod
+    def image_angles(center, frame_shape):
+        height, width = frame_shape[:2]
+        if width <= 0 or height <= 0:
+            raise ValueError("Camera frame must have positive dimensions")
+        dx = (center[0] - width / 2) / (width / 2)
+        dy = (center[1] - height / 2) / (height / 2)
+        yaw = math.degrees(math.atan(dx * math.tan(math.radians(
+            setting("fire.horizontal_fov_deg") / 2))))
+        pitch = -math.degrees(math.atan(dy * math.tan(math.radians(
+            setting("fire.vertical_fov_deg") / 2))))
+        return yaw, pitch
+
+    def update(self, detections, cell, direction, camera_yaw, camera_pitch,
+               frame_shape):
+        """Return (key, detection, streak, new_track) for visible signs."""
+        context = (tuple(cell), direction, camera_yaw, camera_pitch)
+        if context != self.context:
+            self.context = context
+            self.tracks.clear()
+
+        visible = set()
+        results = []
+        for detection in sorted(detections,
+                                key=lambda item: item.get("confidence", 0.0),
+                                reverse=True):
+            key = (tuple(cell), direction, detection["color"], detection["shape"])
+            if key in visible:
+                continue
+            visible.add(key)
+            yaw, pitch = self.image_angles(detection["center"], frame_shape)
+            previous = self.tracks.get(key)
+            same_sign = (previous is not None
+                         and abs(yaw - previous[0]) <= SIGN_TRACK_TOLERANCE_DEG
+                         and abs(pitch - previous[1]) <= SIGN_TRACK_TOLERANCE_DEG)
+            streak = previous[2] + 1 if same_sign else 1
+            self.tracks[key] = (yaw, pitch, streak)
+            results.append((key, detection, streak, not same_sign))
+
+        self.tracks = {key: track for key, track in self.tracks.items()
+                       if key in visible}
+        return results
 
 
 def front_wall_measurement(slam, state, now=None):
@@ -203,7 +259,14 @@ def inspect_walls_during_scan(explorer, inspection, lock, finished, shooter=None
                     if finished.is_set() or not backend.controller._running.is_set():
                         break
                     with lock:
+                        for target in inspection.get("targets", []):
+                            if target["confirmed"]:
+                                key = (direction, target["color"], target["shape"])
+                                pending_targets.setdefault(key, []).append(
+                                    dict(target, tof_distance_mm=distance_mm))
                         inspection["active"] = False
+                        inspection["targets"] = []
+                        inspection["observations"] = []
                     try:
                         if sweep_yaw != camera_yaw:
                             sweep_action = robot.gimbal.moveto(
@@ -386,7 +449,7 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
                     target_color="Red", target_shape="All"):
     outcome = {"completed": False, "error": None}
     sign_marks = {}
-    confirmation_streaks = {}
+    confirmation_tracker = SignConfirmationTracker()
     inspection = {"active": False}
     inspection_lock = threading.Lock()
     inspection_finished = threading.Event()
@@ -462,19 +525,15 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
                     else explorer.slam.heading
                 )
 
-                valid_candidates = set()
                 if valid_wall_distance is not None:
-                    # เก็บและตรวจทุกเป้าที่กล้องเห็นใน Cell นี้
-                    sorted_dets = sorted(detections, key=lambda d: d.get("confidence", 0.0), reverse=True)
-                    target_detections = sorted_dets
-                    for detection in target_detections:
-                        key = (current_cell, current_direction,
-                               detection["color"], detection["shape"])
-                        if key in valid_candidates:
-                            continue
-                        valid_candidates.add(key)
-                        streak = confirmation_streaks.get(key, 0) + 1
-                        confirmation_streaks[key] = streak
+                    sightings = confirmation_tracker.update(
+                        detections, current_cell, current_direction,
+                        active_inspection["camera_yaw"],
+                        active_inspection["camera_pitch"], frame.shape,
+                    )
+                    for key, detection, streak, new_track in sightings:
+                        if new_track and key not in sign_marks:
+                            captured_snapshots.pop(key, None)
 
                         # Capture up to 3 confirmation snapshot images
                         if key not in captured_snapshots:
@@ -522,12 +581,8 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
                                 float(np.median(mark["tof_distances_mm"])), 1
                             )
                             mark["last_seen_timestamp"] = time.time()
-                    confirmation_streaks = {
-                        key: streak for key, streak in confirmation_streaks.items()
-                        if key in valid_candidates
-                    }
                 else:
-                    confirmation_streaks.clear()
+                    confirmation_tracker.reset()
 
                 if active_inspection is not None:
                     with inspection_lock:
@@ -538,7 +593,8 @@ def run_camera_loop(explorer, camera, camera_is_robot, stop_motion=None,
 
                 gate_text = (
                     "WALL VERIFIED - LOOKING DOWN: sign {}/{} frames | marked {}"
-                    .format(max(confirmation_streaks.values(), default=0),
+                    .format(max((track[2] for track in confirmation_tracker.tracks.values()),
+                                default=0),
                             SIGN_CONFIRMATION_FRAMES, len(sign_marks))
                     if valid_wall_distance is not None
                     else "WAITING FOR FRONT WALL SCAN - signs are not marked"
