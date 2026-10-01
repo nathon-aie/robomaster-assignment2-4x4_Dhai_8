@@ -77,7 +77,7 @@ class RobotSystem:
             self.robot = None
             return False
 
-    def setup_threads(self):
+    def setup_threads(self, controller_class=RobotControllerThread):
         """Spawns Thread 1 and Thread 2 with thread-safe shared memory."""
         if self.robot is None:
             raise RuntimeError("Robot is not connected")
@@ -91,7 +91,7 @@ class RobotSystem:
         )
 
         # Thread 2: Robot Motion Controller
-        self.thread_2_controller = RobotControllerThread(
+        self.thread_2_controller = controller_class(
             sensor_hub=self.sensor_hub,
             robot=self.robot,
         )

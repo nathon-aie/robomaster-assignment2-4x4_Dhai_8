@@ -25,7 +25,7 @@ class TargetFireController:
 
     def __init__(self, robot, inspection, lock, stopped, mode, events,
                  pose_provider=None, target_color="Red", target_shape="All"):
-        if target_color not in TARGET_COLORS:
+        if target_color is not None and target_color not in TARGET_COLORS:
             raise ValueError("Unsupported target color: {}".format(target_color))
         if target_shape not in TARGET_SHAPES:
             raise ValueError("Unsupported target shape: {}".format(target_shape))
@@ -51,7 +51,7 @@ class TargetFireController:
         self.default_target_distance_m = setting("fire.default_target_distance_m")
 
     def matches_target(self, target):
-        return (target["color"] == self.target_color
+        return ((self.target_color is None or target["color"] == self.target_color)
                 and (self.target_shape == "All" or target["shape"] == self.target_shape))
 
     def _matches_sighting(self, target, sighting):

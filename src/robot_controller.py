@@ -49,6 +49,7 @@ class RobotControllerThread(threading.Thread):
         self.target_heading_deg = 0.0
         self.yaw_speed_command_sign = setting("robot.yaw_speed_command_sign")
         self.strict_sensors = False
+        self.recovery_wait_total_sec = 0.0
         self.front_ready = False
         self.calibration_manager = None
 
@@ -204,6 +205,7 @@ class RobotControllerThread(threading.Thread):
         dt = 1.0 / control_loop_hz
         max_duration = (self.grid_size_m / max(0.1, self.base_speed)) * setting("navigation.timeout_multiplier") + setting("navigation.timeout_extra_sec")
         t_start = time.monotonic()
+        initial_recovery_wait = self.recovery_wait_total_sec
 
         last_case_id = None
         reason = "interrupted"
@@ -212,7 +214,7 @@ class RobotControllerThread(threading.Thread):
 
         while dist_traveled < self.grid_size_m and self._running.is_set():
             loop_t0 = time.monotonic()
-            if (loop_t0 - t_start) > max_duration:
+            if (loop_t0 - t_start - (self.recovery_wait_total_sec - initial_recovery_wait)) > max_duration:
                 print(f"  [Warning] Grid step reached timeout limit ({max_duration:.1f}s).")
                 reason = "timeout"
                 break

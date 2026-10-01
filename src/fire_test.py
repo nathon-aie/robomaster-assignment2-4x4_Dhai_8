@@ -10,7 +10,7 @@ from pathlib import Path
 
 import cv2
 
-from detect_camera import build_side_by_side_view, detect_signs
+from .detect_camera import build_side_by_side_view, detect_signs
 
 from .sdk_connection import initialize_robot, load_robot_sdk
 from .settings import get as setting, project_path

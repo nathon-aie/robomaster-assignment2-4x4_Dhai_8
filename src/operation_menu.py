@@ -180,6 +180,7 @@ class OperationGUI:
 
         self.task_buttons = [self.start_explore_btn, self.direct_explore_btn]
         for label, task in [
+            ('ตรวจกล้องหุ่นยนต์ (รับภาพ 5 เฟรม)', 'camera-check'),
             ('ตรวจจับเป้าหมายจากกล้องสด (ทดสอบกล้อง)', 'detect-camera'),
             ('ตรวจจับเป้าหมายจากเว็บแคม', 'detect-webcam'),
             ('ทดสอบเล็งและยิง (หุ่นไม่เดิน)', 'fire-test'),
@@ -269,6 +270,8 @@ class OperationGUI:
             params['fire_type'] = self.fire_mode.get()
             params['target_color'] = TARGET_COLOR_OPTIONS[self.target_color.current()][1]
             params['target_shape'] = TARGET_SHAPE_OPTIONS[self.target_shape.current()][1]
+        elif task == 'camera-check':
+            params['conn_type'] = 'ap' if self.conn_mode.current() == 0 else 'sta'
         elif task == 'detect-camera':
             params['mode'] = 'robot-ap' if self.conn_mode.current() == 0 else 'robot-sta'
         elif task == 'detect-webcam':

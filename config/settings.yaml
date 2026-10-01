@@ -23,6 +23,9 @@ sensors:
   tof_filter: {min_valid: 10, max_valid: 5000, median_window: 5, ema_alpha: 0.40}
 
 navigation:
+  camera_start_timeout_sec: 8.0
+  camera_frame_timeout_sec: 3.0
+  sensor_recovery_timeout_sec: 1.0
   grid_size_m: 0.60
   base_speed_mps: 0.425
   step_test_speed_mps: 0.22
@@ -59,6 +62,14 @@ navigation:
 pid:
   lateral: {kp: 0.0005, ki: 0.0001, kd: 0.0, max_speed: 0.04, integral_limit: 30}
   yaw: {kp: 3.0, ki: 0.0, kd: 0.0, max_speed: 90, integral_limit: 20}
+
+second_pass:
+  base_speed_mps: 0.25
+  lateral_kp: 0.0006
+  lateral_ki: 0.0
+  lateral_kd: 0.0
+  max_lateral_speed_mps: 0.05
+  lateral_slew_mps2: 0.25
 
 telemetry:
   buffer_capacity: 30000

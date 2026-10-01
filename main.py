@@ -267,7 +267,7 @@ def run_exploration_detection(conn_type=None, mock=False, on_map_ready=None,
                               control=None, fire_type='water_fire', on_frame=None,
                               target_color='Red', target_shape='All'):
     """Explore with SLAM, detect signs, and fire at matching confirmed targets."""
-    import slam_detect_camera
+    from src import slam_detect_camera
     conn_type = conn_type or setting('robot.conn_type')
     calib = Path(project_path('paths.calibration'))
     if not calib.is_absolute():
@@ -331,7 +331,7 @@ def _mark_unfinished_map(path, status, error):
 
 def run_camera_detection(mode: str = 'robot-ap', control=None, on_frame=None):
     """Live target detection with 3 confirmation snapshots."""
-    import detect_camera
+    from src import detect_camera
     try:
         detect_camera.main(
             on_frame=on_frame,
@@ -395,7 +395,13 @@ def main():
 
 
 def run_selected(task, parameters, gui, control):
+    from src.camera_check import run_camera_check
+
     handlers = {
+        'camera-check': lambda: run_camera_check(
+            conn_type=parameters.get('conn_type', setting('robot.conn_type')),
+            cancel=control.cancel,
+        ),
         'explore': lambda: run_exploration(on_map_ready=gui.show_map, control=control),
         'explore-detect': lambda: run_exploration_detection(
             conn_type=parameters.get('conn_type', setting('robot.conn_type')),

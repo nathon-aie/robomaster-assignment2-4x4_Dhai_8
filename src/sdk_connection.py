@@ -5,23 +5,58 @@ to the SDK's exact constant objects before initialize(), without modifying the S
 """
 
 import sys
+from importlib import machinery, util
+
+
+def _load_native_camera_codec():
+    """Prefer an installed native codec over the project-local adapter."""
+    if "libmedia_codec" in sys.modules:
+        return
+    for directory in sys.path:
+        if not directory:
+            continue
+        spec = machinery.PathFinder.find_spec("libmedia_codec", [directory])
+        if (spec is None or spec.origin is None
+                or not any(spec.origin.endswith(suffix)
+                           for suffix in machinery.EXTENSION_SUFFIXES)):
+            continue
+        codec = util.module_from_spec(spec)
+        sys.modules["libmedia_codec"] = codec
+        try:
+            spec.loader.exec_module(codec)
+        except Exception:
+            del sys.modules["libmedia_codec"]
+            raise
+        return
 
 
 def load_robot_sdk():
-    """Load RoboMaster SDK while keeping camera media codec optional.
+    """Load RoboMaster SDK for tasks that may not use a camera.
 
     The DJI SDK imports camera/media from robomaster.robot even when the
     robot tasks only need sensor and chassis modules.
-    Some Linux installs do not ship libmedia_codec, so provide a small no-op
+    Prefer an installed native libmedia_codec over the local adapter. Some
+    SDK installs do not ship a usable codec, so provide a small no-op
     codec module that lets Robot() construct camera/liveview objects. Camera
-    streaming remains unavailable in that environment, but the robot tasks
-    do not use it.
+    streaming remains unavailable in that environment. Camera missions must
+    call require_camera_codec() before starting motion.
     """
+    _load_native_camera_codec()
+    if "libmedia_codec" not in sys.modules:
+        try:
+            from . import libmedia_codec as codec
+        except ModuleNotFoundError as exc:
+            if exc.name not in ("libh264decoder", "opus_decoder"):
+                raise
+        else:
+            # DJI imports this name at the top level. The project adapter lives
+            # in src; register its SDK name before importing robomaster.robot.
+            sys.modules["libmedia_codec"] = codec
     try:
         from robomaster import robot
         return robot
     except ModuleNotFoundError as exc:
-        if exc.name != "libmedia_codec":
+        if exc.name not in ("libmedia_codec", "libh264decoder", "opus_decoder"):
             raise RuntimeError("RoboMaster SDK is not installed correctly: {}".format(exc))
 
     import types
@@ -31,7 +66,7 @@ def load_robot_sdk():
             pass
 
         def decode(self, *args, **kwargs):
-            return None
+            return []
 
         def stop(self, *args, **kwargs):
             pass
@@ -43,6 +78,7 @@ def load_robot_sdk():
     codec.H264Decoder = _NoCameraCodec
     codec.OpusDecoder = _NoCameraCodec
     codec.AudioDecoder = _NoCameraCodec
+    codec._camera_codec_unavailable = True
     sys.modules["libmedia_codec"] = codec
 
     try:
@@ -50,6 +86,21 @@ def load_robot_sdk():
         return robot
     except ImportError as exc:
         raise RuntimeError("RoboMaster SDK is not installed correctly: {}".format(exc))
+
+
+def require_camera_codec():
+    """Fail before robot motion if this Python cannot decode RoboMaster video."""
+    try:
+        load_robot_sdk()
+    except (ImportError, OSError) as exc:
+        raise RuntimeError("RoboMaster video codec cannot load: {}".format(exc)) from exc
+    codec = sys.modules.get("libmedia_codec")
+    if codec is None or getattr(codec, "_camera_codec_unavailable", False):
+        raise RuntimeError(
+            "libmedia_codec is missing from the active Python environment; "
+            "install the RoboMaster SDK with its native video codec before using camera missions"
+        )
+    return codec
 
 
 def canonical_connection_type(value):

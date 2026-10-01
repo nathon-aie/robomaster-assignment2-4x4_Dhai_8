@@ -11,24 +11,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from detect_camera import detect_signs, build_side_by_side_view
-try:
-    from src.grid_slam import DIRECTIONS, NAMES, DFSExplorer, wrap
-    from src.settings import get as setting
-    from src.settings import project_path
-    from src.target_fire import TargetFireController
-    from src.slam_report import save_actions_html, save_events_csv
-    from src.slam_report import render_map_image as render_trajectory_map
-except ImportError:
-    from SLAM.src.grid_slam import DIRECTIONS, NAMES, DFSExplorer, wrap
-    from SLAM.src.settings import get as setting
-    from SLAM.src.settings import project_path
-    from SLAM.src.target_fire import TargetFireController
-    from SLAM.src.slam_report import save_actions_html, save_events_csv
-    from SLAM.src.slam_report import render_map_image as render_trajectory_map
+from .detect_camera import detect_signs, build_side_by_side_view
+from .grid_slam import DIRECTIONS, NAMES, DFSExplorer, wrap
+from .settings import get as setting, project_path, PROJECT_ROOT
+from .target_fire import TargetFireController
+from .slam_report import save_actions_html, save_events_csv
+from .slam_report import render_map_image as render_trajectory_map
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
 MAX_SENSOR_AGE_SEC = setting("slam.max_sensor_age_sec")
 FRONT_VIEW_TOLERANCE_DEG = 12.0
 MAX_STATIONARY_SPEED_MPS = 0.03
@@ -652,12 +642,8 @@ def run_simulation(camera_index, output, control=None, on_frame=None):
 def run_hardware(conn_type, calibration_path, output, control=None,
                  fire_type="water_fire", on_frame=None,
                  target_color="Red", target_shape="All"):
-    try:
-        from src.robot_system import RobotSystem
-        from src.slam_hardware import HardwareBackend
-    except ImportError:
-        from SLAM.src.robot_system import RobotSystem
-        from SLAM.src.slam_hardware import HardwareBackend
+    from .robot_system import RobotSystem
+    from .slam_hardware import HardwareBackend
 
     system = RobotSystem(
         calibration_file=str(calibration_path), conn_type=conn_type,

@@ -33,7 +33,10 @@ for key in ("sensors.rate_hz", "sensors.history_capacity",
             "navigation.step_test_speed_mps", "navigation.control_rate_hz",
             "navigation.nominal_side_mm", "navigation.front_target_mm",
             "navigation.emergency_front_mm", "navigation.end_deceleration_m",
-            "telemetry.buffer_capacity"):
+            "telemetry.buffer_capacity", "navigation.camera_start_timeout_sec",
+            "navigation.camera_frame_timeout_sec", "navigation.sensor_recovery_timeout_sec",
+            "second_pass.base_speed_mps", "second_pass.max_lateral_speed_mps",
+            "second_pass.lateral_slew_mps2"):
     value = get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float("inf"):
         raise ValueError("Setting {} must be a finite positive number".format(key))
@@ -147,3 +150,8 @@ for key in ("gimbal.recenter_yaw_speed_dps", "gimbal.recenter_pitch_speed_dps"):
     value = get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 360:
         raise ValueError("Setting {} must be in (0, 360] degrees/sec".format(key))
+
+for key in ("second_pass.lateral_kp", "second_pass.lateral_ki", "second_pass.lateral_kd"):
+    value = get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value < float("inf"):
+        raise ValueError("Setting {} must be a finite non-negative number".format(key))
