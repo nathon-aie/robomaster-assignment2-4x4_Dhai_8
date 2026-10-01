@@ -49,6 +49,9 @@ class RobotControllerThread(threading.Thread):
         self.target_heading_deg = 0.0
         self.yaw_speed_command_sign = setting("robot.yaw_speed_command_sign")
         self.strict_sensors = False
+        self.pause_on_sensor_outage = False
+        self.recovery_callback = None
+        self.recovery_wait_total_sec = 0.0
         self.front_ready = False
         self.calibration_manager = None
 
@@ -98,6 +101,50 @@ class RobotControllerThread(threading.Thread):
         except Exception:
             pass
 
+    def _wait_for_sensor_recovery(self, state, fields, failure, newer_attitude_than=None):
+        """Wait stationary for fresh packets; Navigation may remain paused until Stop."""
+        self.stop_chassis()
+        started = time.monotonic()
+        grace = setting("navigation.sensor_recovery_timeout_sec")
+        paused = False
+        while self._running.is_set():
+            now = time.monotonic()
+            fresh = all(0 < getattr(state, name) <= now
+                        and now - getattr(state, name) <= setting("slam.max_sensor_age_sec")
+                        for name in fields)
+            if newer_attitude_than is not None:
+                fresh = fresh and state.attitude_received_at > newer_attitude_than
+            if fresh:
+                waited = now - started
+                self.recovery_wait_total_sec += waited
+                return state, waited, paused
+            if now - started >= grace:
+                if not self.pause_on_sensor_outage:
+                    raise RuntimeError(failure)
+                if not paused:
+                    paused = True
+                    if self.recovery_callback is not None:
+                        self.recovery_callback("paused", failure)
+                    print("[Controller] Navigation paused; waiting for fresh sensor packets. Press Stop to cancel.")
+            time.sleep(0.02)
+            state = self.sensor_hub.get_latest_state()
+        raise KeyboardInterrupt
+
+    def _validate_recovered_pose(self, before, after, target_heading):
+        values = (before.pos_x, before.pos_y, after.pos_x, after.pos_y, after.yaw)
+        if not all(math.isfinite(value) for value in values):
+            raise RuntimeError("Invalid chassis pose after sensor recovery")
+        drift = math.hypot(after.pos_x - before.pos_x, after.pos_y - before.pos_y)
+        if drift > setting("slam.localization_gate_m"):
+            raise RuntimeError("Chassis moved {:.3f} m during sensor recovery; position uncertain".format(drift))
+        heading_error = (after.yaw - target_heading + 180.0) % 360.0 - 180.0
+        if abs(heading_error) > setting("navigation.max_heading_error_deg"):
+            raise RuntimeError("Chassis heading changed during sensor recovery: {:.1f} deg".format(heading_error))
+
+    def _recovery_completed(self, paused):
+        if paused and self.recovery_callback is not None:
+            self.recovery_callback("resumed", "Fresh pose and heading verified")
+
     # -----------------------------------------------------------------------
     # Step 3: Grid-by-Grid Navigation & PID Centering
     # -----------------------------------------------------------------------
@@ -108,9 +155,24 @@ class RobotControllerThread(threading.Thread):
             return state
         now = time.monotonic()
         age = setting("slam.max_sensor_age_sec")
-        for name in ("tof_received_at", "position_received_at", "attitude_received_at", "gimbal_received_at", "sharp_left_received_at", "sharp_right_received_at"):
-            if not 0 < getattr(state, name) <= now or now - getattr(state, name) > age:
-                raise RuntimeError("Stale sensor stream: {}".format(name))
+        sensor_times = ("tof_received_at", "position_received_at", "attitude_received_at",
+                        "gimbal_received_at", "sharp_left_received_at",
+                        "sharp_right_received_at")
+
+        def stale_fields(snapshot, checked_at):
+            return [name for name in sensor_times
+                    if not 0 < getattr(snapshot, name) <= checked_at
+                    or checked_at - getattr(snapshot, name) > age]
+
+        stale = stale_fields(state, now)
+        paused = False
+        if stale:
+            before = state
+            state, _, paused = self._wait_for_sensor_recovery(
+                state, sensor_times, "Stale sensor stream: {}".format(stale[0]))
+            self._validate_recovered_pose(before, state, self.target_heading_deg)
+            self.wall_pid.reset()
+            print("[Controller] Sensor stream recovered; resuming from fresh pose and ToF.")
         if not all(math.isfinite(v) for v in (state.pos_x, state.pos_y, state.yaw, state.gimbal_yaw, state.gimbal_pitch)):
             raise RuntimeError("Non-finite pose or Gimbal angle")
         if abs(state.gimbal_yaw) > setting("gimbal.front_yaw_tolerance_deg"):
@@ -130,6 +192,7 @@ class RobotControllerThread(threading.Thread):
         # A fresh reading beyond the far limit means no nearby wall. Keep the
         # last filtered distance for braking, including if it is near.
         # Close invalid readings and stale packets still fail above.
+        self._recovery_completed(paused)
         return replace(state, tof_valid=True, tof_filtered_mm=min(distance, filtered))
 
     def align_at_cell_center(self, duration_sec: float = setting("navigation.align_default_duration_sec")):
@@ -163,6 +226,124 @@ class RobotControllerThread(threading.Thread):
         finally:
             self.stop_chassis()
 
+    def navigate_straight_cells(self, cells: int, on_cell=None):
+        """Drive a straight map run without stopping at intermediate cell centers."""
+        if cells < 1:
+            raise ValueError("cells must be positive")
+        if cells == 1:
+            result = self.navigate_single_grid_step()
+            return result
+
+        self.current_action = "NAVIGATE_STRAIGHT_{}_CELLS".format(cells)
+        total_distance = cells * self.grid_size_m
+        print("\n  [Straight Run] Moving {} cells ({:.2f} m) without intermediate stops..."
+              .format(cells, total_distance))
+        initial = self.motion_state()
+        start_x, start_y = initial.pos_x, initial.pos_y
+        self.wall_pid.reset()
+        control_hz = setting("navigation.control_rate_hz")
+        dt = 1.0 / control_hz
+        max_duration = (total_distance / max(0.1, self.base_speed)
+                        * setting("navigation.timeout_multiplier")
+                        + setting("navigation.timeout_extra_sec"))
+        started = time.monotonic()
+        initial_recovery_wait = self.recovery_wait_total_sec
+        reached_cells = 0
+        distance = 0.0
+        reason = "interrupted"
+        last_case_id = None
+
+        try:
+            while distance < total_distance and self._running.is_set():
+                loop_started = time.monotonic()
+                if (loop_started - started
+                        - (self.recovery_wait_total_sec - initial_recovery_wait) > max_duration):
+                    reason = "timeout"
+                    break
+                state = self.motion_state()
+                dx, dy = state.pos_x - start_x, state.pos_y - start_y
+                radians = math.radians(self.target_heading_deg)
+                distance = max(0.0, dx * math.cos(radians) + dy * math.sin(radians))
+                lateral = -dx * math.sin(radians) + dy * math.cos(radians)
+                heading_error = (state.yaw - self.target_heading_deg + 180.0) % 360.0 - 180.0
+                if not all(math.isfinite(value) for value in (distance, lateral, heading_error)):
+                    reason = "invalid_pose"
+                    break
+                if abs(heading_error) > setting("navigation.max_heading_error_deg"):
+                    reason = "heading_deviation"
+                    break
+                if abs(lateral) > setting("navigation.max_lateral_deviation_m"):
+                    reason = "lateral_deviation"
+                    break
+                if state.tof_valid and state.tof_filtered_mm is not None:
+                    if state.tof_filtered_mm <= setting("navigation.emergency_front_mm"):
+                        reason = "emergency_obstacle"
+                        break
+                    stop_distance = (self.wall_pid.front_target_mm
+                                     + setting("navigation.front_stop_tolerance_mm"))
+                    if state.tof_filtered_mm <= stop_distance:
+                        reason = "front_wall"
+                        break
+                if distance >= total_distance:
+                    reason = "distance_reached"
+                    break
+
+                while (reached_cells < cells - 1
+                       and distance >= (reached_cells + 1) * self.grid_size_m):
+                    reached_cells += 1
+                    if on_cell is not None:
+                        on_cell(reached_cells)
+
+                remaining = total_distance - distance
+                forward_speed = self.base_speed
+                if remaining < setting("navigation.end_deceleration_m"):
+                    forward_speed = max(
+                        setting("navigation.minimum_forward_speed_mps"),
+                        self.base_speed * remaining / setting("navigation.end_deceleration_m"))
+                vx, vy, vz, case_name, case_id, error_y = self.wall_pid.compute_control_speeds(
+                    state=state, target_yaw_deg=self.target_heading_deg,
+                    base_vx=forward_speed, dt=dt)
+                if case_id != last_case_id:
+                    print("  [PID Centering] {} | Lat Err: {:+.1f} mm | vy: {:+.2f} m/s"
+                          .format(case_name, error_y, vy))
+                    last_case_id = case_id
+                self.drive_speed(vx=vx, vy=vy, vz=vz)
+                remaining_loop = dt - (time.monotonic() - loop_started)
+                if remaining_loop > 0:
+                    time.sleep(remaining_loop)
+
+            self.stop_chassis()
+            end_state = self.motion_state()
+            dx, dy = end_state.pos_x - start_x, end_state.pos_y - start_y
+            radians = math.radians(self.target_heading_deg)
+            forward = dx * math.cos(radians) + dy * math.sin(radians)
+            lateral = -dx * math.sin(radians) + dy * math.cos(radians)
+            heading_error = (end_state.yaw - self.target_heading_deg + 180.0) % 360.0 - 180.0
+            if reason == "front_wall":
+                minimum = (cells - 1 + setting("navigation.front_wall_arrival_min_fraction"))
+                arrived = forward >= minimum * self.grid_size_m
+            else:
+                arrived = (reason == "distance_reached" and
+                           abs(forward - total_distance) <= setting("slam.cell_arrival_tolerance_m"))
+            completed = self._running.is_set() and arrived
+            if completed:
+                self.align_at_cell_center(duration_sec=setting("navigation.align_duration_sec"))
+                end_state = self.motion_state()
+                dx, dy = end_state.pos_x - start_x, end_state.pos_y - start_y
+                forward = dx * math.cos(radians) + dy * math.sin(radians)
+                lateral = -dx * math.sin(radians) + dy * math.cos(radians)
+                heading_error = (end_state.yaw - self.target_heading_deg + 180.0) % 360.0 - 180.0
+                completed = (self._running.is_set() and
+                             (forward >= minimum * self.grid_size_m if reason == "front_wall"
+                              else abs(forward - total_distance)
+                              <= setting("slam.cell_arrival_tolerance_m")))
+            if not completed and reason == "distance_reached":
+                reason = "arrival_pose_outside_tolerance"
+            return {"completed": completed, "reason": reason, "distance_m": forward,
+                    "lateral_deviation_m": lateral, "heading_error_deg": heading_error}
+        finally:
+            self.stop_chassis()
+
     def _navigate_single_grid_step(self, step_idx: int = 1, total_steps: int = 1):
         """Navigates exactly 1 grid cell (60 cm) using closed-loop PID lateral centering."""
         self.current_action = f"NAVIGATE_GRID_{step_idx}_OF_{total_steps}"
@@ -178,13 +359,15 @@ class RobotControllerThread(threading.Thread):
         dt = 1.0 / control_loop_hz
         max_duration = (self.grid_size_m / max(0.1, self.base_speed)) * setting("navigation.timeout_multiplier") + setting("navigation.timeout_extra_sec")
         t_start = time.monotonic()
+        initial_recovery_wait = self.recovery_wait_total_sec
 
         last_case_id = None
         reason = "interrupted"
 
         while dist_traveled < self.grid_size_m and self._running.is_set():
             loop_t0 = time.monotonic()
-            if (loop_t0 - t_start) > max_duration:
+            if (loop_t0 - t_start
+                    - (self.recovery_wait_total_sec - initial_recovery_wait)) > max_duration:
                 print(f"  [Warning] Grid step reached timeout limit ({max_duration:.1f}s).")
                 reason = "timeout"
                 break
@@ -339,7 +522,18 @@ class RobotControllerThread(threading.Thread):
             state = self.sensor_hub.get_latest_state()
             now = time.monotonic()
             if not 0 < state.attitude_received_at <= now or now - state.attitude_received_at > setting("slam.max_sensor_age_sec"):
-                raise RuntimeError("Stale chassis attitude during turn alignment")
+                before = state
+                state, waited, paused = self._wait_for_sensor_recovery(
+                    state, ("attitude_received_at", "position_received_at"),
+                    "Stale chassis attitude during turn alignment",
+                    newer_attitude_than=last_attitude_at)
+                self._validate_recovered_pose(before, state, target_heading)
+                self._recovery_completed(paused)
+                now = time.monotonic()
+                deadline += waited
+                within_tolerance = 0
+                probe_yaw = None
+                print("[Controller] Attitude stream recovered; resuming turn alignment.")
             if not math.isfinite(state.yaw):
                 raise RuntimeError("Invalid chassis yaw during turn alignment")
             if state.attitude_received_at <= last_attitude_at:

@@ -24,6 +24,11 @@ sensors:
 
 navigation:
   grid_size_m: 0.60
+  camera_start_timeout_sec: 8.0
+  camera_frame_timeout_sec: 3.0
+  # After this grace period Navigation stays paused until fresh sensors return
+  # or the operator presses Stop. Explore keeps its bounded recovery behavior.
+  sensor_recovery_timeout_sec: 1.0
   base_speed_mps: 0.40
   step_test_speed_mps: 0.22
   control_rate_hz: 20
@@ -56,6 +61,14 @@ navigation:
 pid:
   lateral: {kp: 0.0030, ki: 0.0001, kd: 0.0010, max_speed: 0.05, integral_limit: 30}
   yaw: {kp: 3.0, ki: 0.0, kd: 0.0, max_speed: 90, integral_limit: 20}
+
+second_pass:
+  base_speed_mps: 0.25
+  lateral_kp: 0.0006
+  lateral_ki: 0.0
+  lateral_kd: 0.0
+  max_lateral_speed_mps: 0.05
+  lateral_slew_mps2: 0.25
 
 telemetry:
   buffer_capacity: 30000

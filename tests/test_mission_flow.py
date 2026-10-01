@@ -36,10 +36,10 @@ class MissionFlowTest(unittest.TestCase):
         def measured(*args):
             measurements.append((backend.sample.call_count, args))
 
-        with (patch("src.slam_hardware.cancel_chassis_speed_timer"),
-              patch("src.slam_hardware.load_robot_sdk",
-                    return_value=SimpleNamespace(FREE="free"))):
-            ranges, _, _ = backend.scan(on_measurement=measured)
+        with patch("src.slam_hardware.cancel_chassis_speed_timer"):
+            with patch("src.slam_hardware.load_robot_sdk",
+                       return_value=SimpleNamespace(FREE="free")):
+                ranges, _, _ = backend.scan(on_measurement=measured)
 
         self.assertEqual(set(ranges), {0, 1, 3})
         self.assertEqual(measurements, [
@@ -113,13 +113,13 @@ class MissionFlowTest(unittest.TestCase):
         def fast_setting(name):
             return 0 if name == "gimbal.settle_sec" else original_setting(name)
 
-        with (patch.object(mission, "SIGN_INSPECTION_TIMEOUT_SEC", 0.02),
-              patch.object(mission, "setting", side_effect=fast_setting)):
-            mission.inspect_walls_during_scan(
-                explorer, inspection, lock, Finished(),
-                SimpleNamespace(fire_confirmed=fire_confirmed),
-            )
-            backend.scan()
+        with patch.object(mission, "SIGN_INSPECTION_TIMEOUT_SEC", 0.02):
+            with patch.object(mission, "setting", side_effect=fast_setting):
+                mission.inspect_walls_during_scan(
+                    explorer, inspection, lock, Finished(),
+                    SimpleNamespace(fire_confirmed=fire_confirmed),
+                )
+                backend.scan()
 
         self.assertEqual(timeline, [
             ("measure", 3), ("inspect", 3), ("fire", 3),
@@ -153,11 +153,12 @@ class MissionFlowTest(unittest.TestCase):
     def test_hardware_mission_passes_map_directory_to_telemetry(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "run_detect_current" / "explored_map.json"
-            with patch("src.robot_system.RobotSystem") as system_class:
-                system_class.return_value.connect_robot.return_value = False
-                system_class.return_value.thread_2_controller = None
-                with self.assertRaisesRegex(RuntimeError, "Could not connect"):
-                    mission.run_hardware("ap", Path(temp) / "calibration.json", output)
+            with patch("src.sdk_connection.require_camera_codec"):
+                with patch("src.robot_system.RobotSystem") as system_class:
+                    system_class.return_value.connect_robot.return_value = False
+                    system_class.return_value.thread_2_controller = None
+                    with self.assertRaisesRegex(RuntimeError, "Could not connect"):
+                        mission.run_hardware("ap", Path(temp) / "calibration.json", output)
             self.assertEqual(system_class.call_args.kwargs["results_dir"], output.parent)
 
     def test_action_and_event_reports_share_map_directory(self):

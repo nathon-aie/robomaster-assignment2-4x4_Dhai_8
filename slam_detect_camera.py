@@ -769,11 +769,14 @@ def run_hardware(conn_type, calibration_path, output, control=None,
                  fire_type="water_fire", on_frame=None):
     try:
         from src.robot_system import RobotSystem
+        from src.sdk_connection import require_camera_codec
         from src.slam_hardware import HardwareBackend
     except ImportError:
         from SLAM.src.robot_system import RobotSystem
+        from SLAM.src.sdk_connection import require_camera_codec
         from SLAM.src.slam_hardware import HardwareBackend
 
+    require_camera_codec()
     system = RobotSystem(
         calibration_file=str(calibration_path), conn_type=conn_type,
         results_dir=Path(output).resolve().parent,

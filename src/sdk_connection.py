@@ -8,14 +8,14 @@ import sys
 
 
 def load_robot_sdk():
-    """Load RoboMaster SDK while keeping camera media codec optional.
+    """Load RoboMaster SDK for tasks that may not use a camera.
 
     The DJI SDK imports camera/media from robomaster.robot even when the
     robot tasks only need sensor and chassis modules.
-    Some Linux installs do not ship libmedia_codec, so provide a small no-op
+    Some SDK installs do not ship libmedia_codec, so provide a small no-op
     codec module that lets Robot() construct camera/liveview objects. Camera
-    streaming remains unavailable in that environment, but the robot tasks
-    do not use it.
+    streaming remains unavailable in that environment. Camera missions must
+    call require_camera_codec() before starting motion.
     """
     try:
         from robomaster import robot
@@ -31,7 +31,7 @@ def load_robot_sdk():
             pass
 
         def decode(self, *args, **kwargs):
-            return None
+            return []
 
         def stop(self, *args, **kwargs):
             pass
@@ -43,6 +43,7 @@ def load_robot_sdk():
     codec.H264Decoder = _NoCameraCodec
     codec.OpusDecoder = _NoCameraCodec
     codec.AudioDecoder = _NoCameraCodec
+    codec._camera_codec_unavailable = True
     sys.modules["libmedia_codec"] = codec
 
     try:
@@ -50,6 +51,21 @@ def load_robot_sdk():
         return robot
     except ImportError as exc:
         raise RuntimeError("RoboMaster SDK is not installed correctly: {}".format(exc))
+
+
+def require_camera_codec():
+    """Fail before robot motion if this Python cannot decode RoboMaster video."""
+    try:
+        load_robot_sdk()
+    except (ImportError, OSError) as exc:
+        raise RuntimeError("RoboMaster video codec cannot load: {}".format(exc)) from exc
+    codec = sys.modules.get("libmedia_codec")
+    if codec is None or getattr(codec, "_camera_codec_unavailable", False):
+        raise RuntimeError(
+            "libmedia_codec is missing from the active Python environment; "
+            "install the RoboMaster SDK with its native video codec before using camera missions"
+        )
+    return codec
 
 
 def canonical_connection_type(value):

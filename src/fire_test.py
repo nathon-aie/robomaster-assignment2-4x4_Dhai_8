@@ -12,7 +12,7 @@ import cv2
 
 from detect_camera import build_side_by_side_view, detect_signs
 
-from .sdk_connection import initialize_robot, load_robot_sdk
+from .sdk_connection import initialize_robot, load_robot_sdk, require_camera_codec
 from .settings import get as setting, project_path
 from .target_fire import SHOTS_PER_TARGET, TargetFireController
 
@@ -25,6 +25,7 @@ WINDOW_TITLE = "RoboMaster - Stationary Fire Test"
 def run_stationary_fire(conn_type="ap", fire_type="water_fire", cancel=None,
                         show_camera=True, on_frame=None):
     """Aim and request three shots per visible target while the chassis stays put."""
+    require_camera_codec()
     robot_sdk = load_robot_sdk()
     robot = robot_sdk.Robot()
     stopped = cancel if cancel is not None else threading.Event()
